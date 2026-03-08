@@ -1,1 +1,2705 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Hive Crawler</title>
+<meta name="theme-color" content="#060608">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@300;600;700&family=Share+Tech+Mono&display=swap');
 
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root { background: #060608; }
+
+  html {
+    width: 100%; height: 100%;
+    background: #060608 !important;
+  }
+
+  body {
+    width: 100%; height: 100%;
+    overflow: hidden;
+    touch-action: none;
+    -webkit-tap-highlight-color: transparent;
+    background: #060608 !important;
+    position: fixed;
+    inset: 0;
+  }
+
+  /* Hard dark fill behind everything — defeats iframe white bleed */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background: #060608;
+    z-index: -1;
+  }
+
+  /* ═══════════════════════════════════════
+     SPLASH SCREEN
+  ═══════════════════════════════════════ */
+  #splash {
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: #060608;
+    transition: opacity 0.8s ease, transform 0.8s ease;
+  }
+
+  #splash.hidden {
+    opacity: 0;
+    pointer-events: none;
+    transform: scale(1.04);
+  }
+
+  /* Animated hex background on splash */
+  #splash-canvas {
+    position: absolute;
+    inset: 0;
+    opacity: 0.85;
+    pointer-events: none;
+  }
+
+  .splash-content {
+    position: relative;
+    z-index: 2;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0;
+    pointer-events: none;
+  }
+
+  /* ── Logo / wordmark ── */
+  .logo-hex {
+    width: 48px; height: 48px;
+    margin-bottom: 28px;
+    opacity: 0.8;
+  }
+
+  .title-hive {
+    font-family: 'Rajdhani', sans-serif;
+    font-weight: 700;
+    font-size: clamp(56px, 15vw, 88px);
+    letter-spacing: 0.14em;
+    color: #fff;
+    line-height: 1;
+  }
+
+  .title-wave {
+    font-family: 'Rajdhani', sans-serif;
+    font-weight: 300;
+    font-size: clamp(56px, 15vw, 88px);
+    letter-spacing: 0.45em;
+    color: rgba(255,255,255,0.55);
+    line-height: 1;
+    margin-left: 0.45em;
+  }
+
+  .tagline {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.28em;
+    color: rgba(160,80,255,0.75);
+    margin-top: 20px;
+    text-transform: uppercase;
+  }
+
+  /* Big glowing tap button */
+  .enter-btn {
+    pointer-events: all;
+    margin-top: 72px;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0;
+    padding: 22px 52px;
+    border: 1.5px solid rgba(160,80,255,0.7);
+    border-radius: 4px;
+    background: rgba(140,60,255,0.08);
+    box-shadow:
+      0 0 24px rgba(140,60,255,0.25),
+      0 0 60px rgba(140,60,255,0.10),
+      inset 0 0 20px rgba(140,60,255,0.06);
+    animation: btnPulse 2.6s ease-in-out infinite;
+    transition: background 0.12s, box-shadow 0.12s;
+  }
+  @keyframes btnPulse {
+    0%,100% {
+      box-shadow: 0 0 20px rgba(140,60,255,0.22), 0 0 50px rgba(140,60,255,0.08), inset 0 0 16px rgba(140,60,255,0.05);
+      border-color: rgba(160,80,255,0.55);
+    }
+    50% {
+      box-shadow: 0 0 36px rgba(160,80,255,0.50), 0 0 80px rgba(140,60,255,0.20), inset 0 0 28px rgba(140,60,255,0.10);
+      border-color: rgba(200,120,255,0.90);
+    }
+  }
+
+  .enter-tap {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 15px;
+    letter-spacing: 0.38em;
+    color: rgba(255,255,255,0.90);
+    text-transform: uppercase;
+  }
+
+  /* Thin sub-label */
+  .enter-line {
+    width: 0;
+    height: 0;
+    display: none;
+  }
+
+  .enter-btn:active {
+    background: rgba(160,80,255,0.22);
+    box-shadow: 0 0 50px rgba(180,100,255,0.6), inset 0 0 30px rgba(160,80,255,0.15);
+    animation: none;
+  }
+
+  /* Hidden elements from old design */
+  .enter-hex-ring, .enter-hex-ring2, .enter-icon, .enter-start { display: none; }
+
+  /* ═══════════════════════════════════════
+     STAGE (hex grid)
+  ═══════════════════════════════════════ */
+  #stage {
+    position: fixed;
+    inset: 0;
+    opacity: 0;
+    background: #060608;
+    transition: opacity 0.6s ease 0.2s;
+  }
+
+  #stage.visible { opacity: 1; }
+
+  /* ── Hex button ── */
+  .hex {
+    position: absolute;
+    transform-origin: center center;
+    cursor: pointer;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+    --r: 28; --g: 22; --b: 18;
+    transition: transform 0.09s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+    will-change: transform;
+  }
+
+  .hex svg {
+    width: 100%; height: 100%;
+    overflow: visible;
+    display: block;
+  }
+
+  /* Inactive: matte anodized surface — barely any shadow, no glow, flat */
+  .hex-face {
+    transition: filter 0.18s ease, opacity 0.18s ease;
+    filter:
+      drop-shadow(0 2px 2px rgba(0,0,0,0.7))
+      drop-shadow(0 1px 0px rgba(0,0,0,0.9));
+  }
+
+  /* Press: sharp physical depression + tight bloom */
+  .hex.pressed {
+    transform: scale(0.93) translateY(1px);
+  }
+  .hex.pressed .hex-face {
+    filter:
+      drop-shadow(0 0 0px rgba(0,0,0,0))
+      drop-shadow(0 0 20px rgba(var(--r),var(--g),var(--b), 1.0))
+      drop-shadow(0 0 50px rgba(var(--r),var(--g),var(--b), 0.7))
+      drop-shadow(0 0 80px rgba(var(--r),var(--g),var(--b), 0.3));
+    transition: filter 0.03s ease;
+  }
+
+  /* Active (looping): cold neon pulse — wall hidden behind glow */
+  .hex.active .hex-face {
+    filter:
+      drop-shadow(0 2px 2px rgba(0,0,0,0.8))
+      drop-shadow(0 0 8px  rgba(var(--r),var(--g),var(--b), 0.7))
+      drop-shadow(0 0 22px rgba(var(--r),var(--g),var(--b), 0.35));
+  }
+
+  /* On beat hit: scale pop */
+  .hex.active.pressed {
+    transform: scale(0.96);
+  }
+
+  .hex-ring {
+    fill: none;
+    pointer-events: none;
+    stroke-width: 1.5;
+    stroke: transparent;
+  }
+
+  /* ── Ring 1: tight fast ripple ── */
+  .hex.neighbor-pulse .hex-ring {
+    animation: ringOut 0.5s cubic-bezier(0.2, 0.6, 0.4, 1) forwards;
+  }
+  @keyframes ringOut {
+    0%   {
+      stroke: rgba(var(--r),var(--g),var(--b), 0.9);
+      stroke-width: 2;
+      transform: scale(0.95); transform-box: fill-box; transform-origin: center;
+    }
+    100% {
+      stroke: rgba(var(--r),var(--g),var(--b), 0);
+      stroke-width: 0.5;
+      transform: scale(1.22); transform-box: fill-box; transform-origin: center;
+    }
+  }
+  .hex.neighbor-pulse .hex-face {
+    animation: faceFlash 0.5s ease-out forwards;
+  }
+  @keyframes faceFlash {
+    0%   { filter:
+      drop-shadow(0 0 12px rgba(var(--r),var(--g),var(--b), 0.95))
+      drop-shadow(0 0 32px rgba(var(--r),var(--g),var(--b), 0.5)); }
+    100% { filter:
+      drop-shadow(0 2px 2px rgba(0,0,0,0.7))
+      drop-shadow(0 0 0px rgba(var(--r),var(--g),var(--b), 0)); }
+  }
+
+  /* ── Ring 2: spoke-aligned, slightly dimmer ── */
+  .hex.neighbor-pulse-2 .hex-ring {
+    animation: ringOut2 0.68s cubic-bezier(0.15, 0.7, 0.3, 1) forwards;
+  }
+  @keyframes ringOut2 {
+    0%   { stroke: rgba(var(--r),var(--g),var(--b), 0.55); stroke-width: 1.5;
+           transform: scale(0.97); transform-box: fill-box; transform-origin: center; }
+    100% { stroke: rgba(var(--r),var(--g),var(--b), 0);    stroke-width: 0.5;
+           transform: scale(1.18); transform-box: fill-box; transform-origin: center; }
+  }
+  .hex.neighbor-pulse-2 .hex-face {
+    animation: faceFlash2 0.68s ease-out forwards;
+  }
+  @keyframes faceFlash2 {
+    0%   { filter: drop-shadow(0 0 8px rgba(var(--r),var(--g),var(--b), 0.7))
+                   drop-shadow(0 0 20px rgba(var(--r),var(--g),var(--b), 0.3)); }
+    100% { filter: drop-shadow(0 2px 2px rgba(0,0,0,0.7))
+                   drop-shadow(0 0 0px rgba(var(--r),var(--g),var(--b), 0)); }
+  }
+
+
+  /* ═══════════════════════════════════════
+     THUMBSTICK / CHAOS PAD
+  ═══════════════════════════════════════ */
+  #thumbstick-wrap {
+    position: fixed;
+    z-index: 51;
+    display: none;
+    pointer-events: none;
+    /* position set by placeThumbstick() based on grid geometry */
+  }
+  #thumbstick-wrap.visible {
+    display: block;
+    pointer-events: all;
+    animation: stickAppear 0.55s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+  }
+  @keyframes stickAppear {
+    from { opacity: 0; transform: scale(0.5) translate(20px, 20px); }
+    to   { opacity: 1; transform: scale(1)   translate(0,     0);   }
+  }
+
+  /* Outer hex gate — shows the 6 directional zones */
+  #stick-gate {
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+  }
+
+  /* Center pad (draggable) */
+  #stick-pad {
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    cursor: grab;
+    touch-action: none;
+  }
+  #stick-pad:active { cursor: grabbing; }
+
+  /* Axis label text */
+  .stick-label {
+    position: absolute;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 8px;
+    letter-spacing: 0.15em;
+    color: rgba(255,140,40,0.45);
+    text-transform: uppercase;
+    pointer-events: none;
+    white-space: nowrap;
+    transform: translate(-50%, -50%);
+  }
+
+  /* FX readout bar */
+  #fx-readout {
+    position: absolute;
+    bottom: -32px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    pointer-events: none;
+  }
+  .fx-dot {
+    width: 4px; height: 4px;
+    border-radius: 50%;
+    background: rgba(255,140,40,0.3);
+    transition: background 0.15s, transform 0.15s;
+  }
+  .fx-dot.active {
+    background: rgba(255,140,40,0.9);
+    transform: scale(1.5);
+  }
+
+  /* Crawler idle pulse */
+  @keyframes crawlerPulse {
+    0%,100% { filter: drop-shadow(0 0 8px rgba(200,180,255,0.5)) drop-shadow(0 0 20px rgba(160,120,255,0.2)); }
+    50%      { filter: drop-shadow(0 0 18px rgba(220,200,255,0.9)) drop-shadow(0 0 45px rgba(180,140,255,0.5)); }
+  }
+  .hex.crawler-idle .hex-face {
+    animation: crawlerPulse 1.8s ease-in-out infinite;
+  }
+</style>
+</head>
+<body bgcolor="#060608">
+<div style="position:fixed;inset:0;background:#060608;z-index:-999;"></div>
+<!-- ── Splash ── -->
+<div id="splash">
+  <canvas id="splash-canvas"></canvas>
+
+  <div class="splash-content">
+    <!-- Hex logo SVG -->
+    <svg class="logo-hex" viewBox="-50 -50 100 100" xmlns="http://www.w3.org/2000/svg">
+      <polygon points="0,-42 36,-21 36,21 0,42 -36,21 -36,-21"
+               fill="none" stroke="rgba(255,110,20,0.6)" stroke-width="1.2"/>
+      <polygon points="0,-26 22,-13 22,13 0,26 -22,13 -22,-13"
+               fill="none" stroke="rgba(255,110,20,0.25)" stroke-width="1"/>
+    </svg>
+
+    <div class="title-hive">HIVE</div>
+    <div class="title-wave">CRAWLER</div>
+    <div class="tagline">808 hexaphonic beat engine</div>
+  </div>
+
+  <!-- Enter button -->
+  <div class="enter-btn" id="enterBtn">
+    <div class="enter-line"></div>
+    <span class="enter-tap">tap to begin</span>
+  </div>
+</div>
+
+
+<!-- ── Thumbstick chaos pad ── -->
+<div id="thumbstick-wrap">
+  <svg id="stick-gate"></svg>
+  <div id="stick-pad">
+    <svg id="stick-knob"></svg>
+  </div>
+  <div id="fx-readout">
+    <div class="fx-dot" id="dot-filter"></div>
+    <div class="fx-dot" id="dot-dist"></div>
+    <div class="fx-dot" id="dot-delay"></div>
+  </div>
+</div>
+<!-- ── Hex grid stage ── -->
+<div id="stage"></div>
+
+<script>
+(() => {
+
+  /* ══════════════════════════════════════════
+     SPLASH CANVAS — animated hex wireframe
+  ══════════════════════════════════════════ */
+  const canvas = document.getElementById('splash-canvas');
+  const ctx2d = canvas.getContext('2d');
+  let splashAnimId;
+  const splashHexes = [];
+
+  const SPLASH_COLORS = [
+    'rgba(255,100,20,',
+    'rgba(220,60,20,',
+    'rgba(255,160,30,',
+    'rgba(200,80,10,',
+    'rgba(255,200,50,',
+    'rgba(160,40,10,',
+  ];
+
+  function resizeSplashCanvas() {
+    canvas.width  = window.innerWidth;
+    canvas.height = window.innerHeight;
+  }
+
+  function initSplashHexes() {
+    splashHexes.length = 0;
+    const W = canvas.width, H = canvas.height;
+    const r = 32;
+    const colSpacing = r * 1.5;
+    const rowSpacing = r * Math.sqrt(3);
+    const cols = Math.ceil(W / colSpacing) + 2;
+    const rows = Math.ceil(H / rowSpacing) + 2;
+
+    for (let c = -1; c < cols; c++) {
+      for (let row = -1; row < rows; row++) {
+        const cx = c * colSpacing;
+        const cy = row * rowSpacing + (c % 2 === 1 ? rowSpacing / 2 : 0);
+        const colorBase = SPLASH_COLORS[Math.floor(Math.random() * SPLASH_COLORS.length)];
+        splashHexes.push({
+          cx, cy, r,
+          color: colorBase,
+          phase: Math.random() * Math.PI * 2,
+          speed: 0.3 + Math.random() * 0.7,
+          baseAlpha: 0.04 + Math.random() * 0.12,
+        });
+      }
+    }
+  }
+
+  function drawSplashHex(cx, cy, r, alpha, color) {
+    ctx2d.beginPath();
+    for (let i = 0; i < 6; i++) {
+      const a = (Math.PI / 180) * (60 * i);
+      const x = cx + r * Math.cos(a);
+      const y = cy + r * Math.sin(a);
+      i === 0 ? ctx2d.moveTo(x, y) : ctx2d.lineTo(x, y);
+    }
+    ctx2d.closePath();
+    ctx2d.strokeStyle = color + alpha + ')';
+    ctx2d.lineWidth = 1;
+    ctx2d.stroke();
+  }
+
+  let splashT = 0;
+  function animateSplash() {
+    splashT += 0.012;
+    ctx2d.clearRect(0, 0, canvas.width, canvas.height);
+    splashHexes.forEach(h => {
+      const a = h.baseAlpha * (0.5 + 0.5 * Math.sin(splashT * h.speed + h.phase));
+      drawSplashHex(h.cx, h.cy, h.r, a, h.color);
+    });
+    splashAnimId = requestAnimationFrame(animateSplash);
+  }
+
+  resizeSplashCanvas();
+  initSplashHexes();
+  animateSplash();
+
+
+  /* ══════════════════════════════════════════
+     ENTER — init audio + transition
+  ══════════════════════════════════════════ */
+  const splash    = document.getElementById('splash');
+  const enterBtn  = document.getElementById('enterBtn');
+  const stage     = document.getElementById('stage');
+
+  let audioCtx = null;
+  let entered = false;
+
+  // ══════════════════════════════════════════════════════
+  //  AUDIO ENGINE — clean three-bus architecture
+  //
+  //  kickBus ──┐
+  //  percBus ──┼──► masterBus ──► limiter ──► out
+  //  arpBus  ──┘
+  //
+  //  Joystick FX sits on the master bus insert:
+  //    masterBus ──► distInsert ──► filterInsert ──► delayReturn ──► limiter
+  // ══════════════════════════════════════════════════════
+
+  // Joystick FX state (0–1 normalised)
+  const fx = { filter: 0.5, delay: 0.0, dist: 0.0 };
+
+  // Bus nodes — populated by buildAudioChain()
+  let kickBus, percBus, arpBus;           // source buses
+  let fxDistWet, fxDistDry, fxDistShaper; // distortion insert
+  let fxFilter;                            // filter insert
+  let fxDelayNode, fxDelayWet, fxDelayFB; // delay send/return
+  let masterBus, limiter;                 // master + output
+
+  function rampParam(param, target, now, t = 0.06) {
+    param.cancelScheduledValues(now);
+    param.setValueAtTime(param.value, now);
+    param.linearRampToValueAtTime(target, now + t);
+  }
+
+  function buildDistCurve() {
+    // Soft-clip curve baked once — never swapped at runtime (avoids clicks)
+    const n = 512, k = 200;
+    const curve = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      const x = (i * 2) / n - 1;
+      curve[i] = (Math.PI + k) * x / (Math.PI + k * Math.abs(x));
+    }
+    return curve;
+  }
+
+  function buildAudioChain(c) {
+    // ── Source buses ──
+    kickBus = c.createGain(); kickBus.gain.value = 1.0;
+    percBus = c.createGain(); percBus.gain.value = 0.85;
+    arpBus  = c.createGain(); arpBus.gain.value  = 0.80;
+
+    // ── Distortion insert (parallel dry/wet, fixed curve) ──
+    fxDistShaper = c.createWaveShaper();
+    fxDistShaper.curve = buildDistCurve();
+    fxDistShaper.oversample = '4x';
+    fxDistWet = c.createGain(); fxDistWet.gain.value = 0.0;
+    fxDistDry = c.createGain(); fxDistDry.gain.value = 1.0;
+
+    // ── Filter insert (post-distortion) ──
+    fxFilter = c.createBiquadFilter();
+    fxFilter.type = 'lowpass';
+    fxFilter.frequency.value = 20000;
+    fxFilter.Q.value = 0.8;
+
+    // ── Delay send/return ──
+    fxDelayNode = c.createDelay(2.0);
+    fxDelayNode.delayTime.value = (60 / 110) * 0.5; // 8th note at 110bpm
+    fxDelayFB  = c.createGain(); fxDelayFB.gain.value  = 0.35;
+    fxDelayWet = c.createGain(); fxDelayWet.gain.value = 0.0;
+    fxDelayNode.connect(fxDelayFB);
+    fxDelayFB.connect(fxDelayNode);   // feedback loop
+
+    // ── Master bus + output limiter ──
+    masterBus = c.createGain(); masterBus.gain.value = 0.9;
+    limiter = c.createDynamicsCompressor();
+    limiter.threshold.value = -2;
+    limiter.knee.value      =  1;
+    limiter.ratio.value     = 20;
+    limiter.attack.value    = 0.001;
+    limiter.release.value   = 0.05;
+
+    // ── Signal flow ──
+    //
+    // kickBus ─┐
+    // percBus ─┼─► fxDistDry ──────────────────────────────► fxFilter ─┬─► masterBus ─► limiter ─► out
+    // arpBus  ─┘   fxDistShaper ──► fxDistWet ──────────────► fxFilter ─┘
+    //                                              └─► fxDelayNode ─► fxDelayFB(loop)
+    //                                                  fxDelayNode ─► fxDelayWet ─► masterBus
+
+    [kickBus, percBus, arpBus].forEach(bus => {
+      bus.connect(fxDistShaper);
+      bus.connect(fxDistDry);
+    });
+    fxDistShaper.connect(fxDistWet);
+    fxDistWet.connect(fxFilter);
+    fxDistDry.connect(fxFilter);
+    fxFilter.connect(masterBus);
+    fxFilter.connect(fxDelayNode);
+    fxDelayNode.connect(fxDelayWet);
+    fxDelayWet.connect(masterBus);
+    masterBus.connect(limiter);
+    limiter.connect(c.destination);
+  }
+
+  // Route sources to correct bus
+  function getKickDest() { return kickBus || audioCtx?.destination; }
+  function getPercDest() { return percBus || audioCtx?.destination; }
+  function getArpDest()  { return arpBus  || audioCtx?.destination; }
+  function getFxDestination() { return kickBus || audioCtx?.destination; } // legacy alias
+
+  // Apply joystick FX — smooth ramps, no clicks
+  function applyFxState() {
+    if (!masterBus || !audioCtx) return;
+    const now = audioCtx.currentTime;
+    const t   = 0.08;
+
+    // Filter: 0 = dark 120Hz, 0.5 = wide open, 1.0 = bright with resonance
+    const fval = fx.filter;
+    const freq = fval < 0.5
+      ? 120 + (18000 - 120) * Math.pow(fval / 0.5, 2)
+      : 18000 + (22000 - 18000) * ((fval - 0.5) / 0.5);
+    rampParam(fxFilter.frequency, Math.min(freq, 22000), now, t);
+    rampParam(fxFilter.Q, 0.7 + fval * 6, now, t);
+
+    // Delay wet level
+    rampParam(fxDelayWet.gain, fx.delay * 0.6, now, t);
+
+    // Distortion: blend wet in, compensate dry — curve never changes
+    rampParam(fxDistWet.gain, fx.dist * 0.85, now, t);
+    rampParam(fxDistDry.gain, Math.max(0.15, 1.0 - fx.dist * 0.75), now, t);
+  }
+
+  function warmUpAudio(c) {
+    // Schedule a single silent frame through the full FX chain.
+    // This forces Safari/iOS to actually start the graph so the first
+    // real sound doesn't get dropped or cause a click.
+    const buf = c.createBuffer(1, 1, c.sampleRate);
+    const src = c.createBufferSource();
+    src.buffer = buf;
+    src.connect(getKickDest());
+    src.start(c.currentTime);
+  }
+
+  function getCtx() {
+    if (!audioCtx) {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      buildAudioChain(audioCtx);
+    }
+    if (audioCtx.state === 'suspended') {
+      audioCtx.resume().then(() => warmUpAudio(audioCtx));
+    }
+    return audioCtx;
+  }
+
+  enterBtn.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    if (entered) return;
+    entered = true;
+
+    // Init AudioContext on user gesture — resume and warm up the graph
+    const _c = getCtx();
+    const doEnter = () => {
+      warmUpAudio(_c);
+      // Small lookahead so the graph is truly running before first sound
+      setTimeout(welcomeThud, 80);
+    };
+    if (_c.state === 'running') {
+      doEnter();
+    } else {
+      _c.resume().then(doEnter);
+    }
+
+    // Animate out splash, in stage
+    splash.classList.add('hidden');
+    stage.classList.add('visible');
+    // Show thumbstick as soon as grid appears
+    setTimeout(() => placeThumbstick(), 300);
+
+    setTimeout(() => {
+      cancelAnimationFrame(splashAnimId);
+      splash.style.display = 'none';
+    }, 900);
+
+    // Build grid
+    buildGrid();
+    attachStageEvents();
+  }, { passive: false });
+
+  /* Soft welcome thud on enter */
+  function welcomeThud() {
+    const c = getCtx();
+    const now = c.currentTime;
+    const osc = c.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(120, now);
+    osc.frequency.exponentialRampToValueAtTime(40, now + 0.25);
+    const g = c.createGain();
+    g.gain.setValueAtTime(0.4, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + 0.4);
+    osc.connect(g); g.connect(limiter || c.destination);
+    osc.start(now); osc.stop(now + 0.42);
+  }
+
+
+  /* ══════════════════════════════════════════
+     HEX GRID
+  ══════════════════════════════════════════ */
+  // Per-hex color assigned at build time — fully randomized HSL across the spectrum.
+  // Uses a seeded offset per hex so adjacent cells tend to differ in hue.
+  // Colors are vivid (high saturation, mid-high lightness) so they pop against dark bg.
+  const hexColors = {}; // key -> [R, G, B]
+
+  function hslToRgb(h, s, l) {
+    h = ((h % 360) + 360) % 360;
+    s /= 100; l /= 100;
+    const k = n => (n + h / 30) % 12;
+    const a = s * Math.min(l, 1 - l);
+    const f = n => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+    return [Math.round(f(0)*255), Math.round(f(8)*255), Math.round(f(4)*255)];
+  }
+
+  // ── Synth Punk palette ──
+  // Acid greens, hot magentas, electric violets, neon cyan, bruised indigo.
+  // Saturated to the point of violence. Black gaps between make them pop.
+  const EMBER_SWATCHES = [
+    // [hueMin, hueMax, satMin, satMax, lightMin, lightMax, weight]
+    { h:[75,  95],  s:[90,100], l:[48,62], w:4 },  // acid green / toxic lime
+    { h:[155, 175], s:[85,100], l:[44,60], w:3 },  // poison mint / matrix green
+    { h:[185, 200], s:[90,100], l:[46,60], w:3 },  // electric cyan
+    { h:[270, 290], s:[85,100], l:[44,62], w:4 },  // electric violet / synth purple
+    { h:[295, 315], s:[88,100], l:[44,60], w:4 },  // hot magenta / neon pink
+    { h:[320, 338], s:[85,100], l:[46,58], w:3 },  // brutal rose / punk crimson
+    { h:[210, 230], s:[80,100], l:[44,58], w:2 },  // cold blue / ice
+    { h:[48,  62],  s:[90,100], l:[50,62], w:1 },  // hazard yellow (accent, rare)
+  ];
+
+  function weightedSwatch() {
+    const totalW = EMBER_SWATCHES.reduce((a, s) => a + s.w, 0);
+    let r = Math.random() * totalW;
+    for (const sw of EMBER_SWATCHES) { r -= sw.w; if (r <= 0) return sw; }
+    return EMBER_SWATCHES[0];
+  }
+
+  function assignHexColors(btnList) {
+    const hueMap = {};
+    // Shuffle so assignment has no positional bias
+    const shuffled = [...btnList].sort(() => Math.random() - 0.5);
+    shuffled.forEach(btn => {
+      const neighbors = getNeighborKeys(btn.col, btn.row);
+      const usedHues = neighbors.map(k => hueMap[k]).filter(h => h !== undefined);
+
+      // Pick a swatch, then a hue within it that's ≥20° from any neighbor
+      let h, s, l, tries = 0;
+      do {
+        const sw = weightedSwatch();
+        h = sw.h[0] + Math.random() * (sw.h[1] - sw.h[0]);
+        s = sw.s[0] + Math.random() * (sw.s[1] - sw.s[0]);
+        l = sw.l[0] + Math.random() * (sw.l[1] - sw.l[0]);
+        tries++;
+      } while (tries < 24 && usedHues.some(uh => {
+        const diff = Math.abs(h - uh);
+        return Math.min(diff, 360 - diff) < 20;
+      }));
+
+      hueMap[btn.key] = h;
+      hexColors[btn.key] = hslToRgb(h, s, l);
+    });
+  }
+
+  function getColor(key) {
+    return hexColors[key] || [255, 80, 80];
+  }
+
+  // Pick the hue (within ember palette) that is maximally distant from usedHues list
+  function pickMaximalHue(usedHues) {
+    let bestH = null, bestS = 85, bestL = 58, bestScore = -1;
+    const attempts = 48;
+    for (let i = 0; i < attempts; i++) {
+      const sw = weightedSwatch();
+      const h = sw.h[0] + Math.random() * (sw.h[1] - sw.h[0]);
+      const s = sw.s[0] + Math.random() * (sw.s[1] - sw.s[0]);
+      const l = sw.l[0] + Math.random() * (sw.l[1] - sw.l[0]);
+      const minDist = usedHues.length === 0 ? 999
+        : Math.min(...usedHues.map(uh => {
+            const d = Math.abs(h - uh);
+            return Math.min(d, 360 - d);
+          }));
+      if (minDist > bestScore) { bestScore = minDist; bestH = h; bestS = s; bestL = l; }
+    }
+    return [bestH, bestS, bestL];
+  }
+
+  // Reassign color for one hex, maximising distance from its neighbors' current hues
+  function rerollHexColor(btn) {
+    const neighborKeys = getNeighborKeys(btn.col, btn.row);
+    const usedHues = neighborKeys
+      .map(k => hexColors[k])
+      .filter(Boolean)
+      .map(([r, g, b]) => rgbToHue(r, g, b));
+
+    const [h, s, l] = pickMaximalHue(usedHues);
+    hexColors[btn.key] = hslToRgb(h, s, l);
+  }
+
+  // Rough hue extraction from RGB (0-360) for distance comparison
+  function rgbToHue(r, g, b) {
+    r /= 255; g /= 255; b /= 255;
+    const max = Math.max(r, g, b), min = Math.min(r, g, b);
+    if (max === min) return 0;
+    const d = max - min;
+    let h = max === r ? (g - b) / d + (g < b ? 6 : 0)
+          : max === g ? (b - r) / d + 2
+          :             (r - g) / d + 4;
+    return h * 60;
+  }
+
+  // Kick archetypes — each covers a distinct sonic territory
+  const KICK_ARCHETYPES = [
+    // name, startFreq range, endFreq range, decay range, pitchMult, clickType, clickGain, distK
+    { name: 'deep-sub',    sf:[55,90],    ef:[18,30],  dc:[0.5,1.1],  pm:2.2, ct:'sine',     cg:0.3, dk:[20,60]  },
+    { name: 'punchy-mid',  sf:[100,160],  ef:[35,55],  dc:[0.18,0.4], pm:3.0, ct:'triangle', cg:0.7, dk:[80,160] },
+    { name: 'short-blip',  sf:[180,280],  ef:[50,80],  dc:[0.06,0.15],pm:4.0, ct:'square',   cg:0.5, dk:[40,100] },
+    { name: 'lo-boom',     sf:[40,65],    ef:[14,22],  dc:[0.7,1.5],  pm:1.8, ct:'sine',     cg:0.2, dk:[10,40]  },
+    { name: 'tight-snap',  sf:[120,200],  ef:[40,70],  dc:[0.1,0.22], pm:3.5, ct:'triangle', cg:0.9, dk:[100,200]},
+    { name: 'wobbly',      sf:[70,110],   ef:[25,45],  dc:[0.35,0.8], pm:2.5, ct:'sine',     cg:0.4, dk:[50,120] },
+    { name: 'click-kick',  sf:[200,350],  ef:[60,100], dc:[0.08,0.18],pm:5.0, ct:'square',   cg:1.0, dk:[150,250]},
+    { name: 'sub-thud',    sf:[45,75],    ef:[16,26],  dc:[0.6,1.2],  pm:2.0, ct:'triangle', cg:0.35,dk:[15,50]  },
+  ];
+
+  function rnd(lo, hi) { return lo + Math.random() * (hi - lo); }
+
+  // ── Tonal root system ──
+  // The first kick pressed sets a root pitch. Every subsequent kick is tuned
+  // to a musically related interval from that root — chosen randomly each time
+  // a new button is first pressed, but always harmonically consonant.
+  let rootPitch = null; // Hz — set on first button press
+
+  // Intervals as frequency ratios, with their musical names.
+  // All are consonant against the root and sound good in bass/kick context.
+  const HARMONIC_INTERVALS = [
+    { name: 'unison',      ratio: 1.0    },  // same pitch class, different octave ok
+    { name: 'octave-up',   ratio: 2.0    },  // one octave above
+    { name: 'octave-down', ratio: 0.5    },  // one octave below
+    { name: 'fifth',       ratio: 1.5    },  // perfect 5th
+    { name: 'fourth',      ratio: 1.3333 },  // perfect 4th
+    { name: 'fifth-down',  ratio: 0.6667 },  // perfect 5th below (= 4th up inverted)
+    { name: 'fourth-down', ratio: 0.75   },  // perfect 4th below
+    { name: 'min-seventh', ratio: 1.7778 },  // minor 7th — bluesy, deep
+    { name: 'maj-sixth',   ratio: 1.6667 },  // major 6th
+    { name: 'min-third',   ratio: 1.2    },  // minor 3rd — adds darkness
+    { name: 'maj-third',   ratio: 1.25   },  // major 3rd
+    { name: 'two-oct-up',  ratio: 4.0    },  // two octaves — click/high kick
+    { name: 'two-oct-dn',  ratio: 0.25   },  // two octaves down — sub rumble
+  ];
+
+  // Keep track of used intervals so we don't repeat the same one too soon
+  let usedIntervals = [];
+
+  function pickInterval() {
+    // Avoid repeating the last 3 intervals for variety
+    const available = HARMONIC_INTERVALS.filter(
+      iv => !usedIntervals.slice(-3).includes(iv.name)
+    );
+    const iv = available[Math.floor(Math.random() * available.length)];
+    usedIntervals.push(iv.name);
+    return iv.ratio;
+  }
+
+  function randomVoice() {
+    const arch = KICK_ARCHETYPES[Math.floor(Math.random() * KICK_ARCHETYPES.length)];
+
+    // Base frequency from the archetype range
+    let baseFreq = rnd(...arch.sf);
+
+    if (rootPitch === null) {
+      // First kick — this IS the root. Store it.
+      rootPitch = baseFreq;
+    } else {
+      // Subsequent kicks — pick a harmonic interval from root,
+      // then clamp to a playable kick range (18–320 Hz).
+      // If the direct interval is out of range, shift by octaves until it fits.
+      let freq = rootPitch * pickInterval();
+      // Octave-shift into the kick-friendly range
+      while (freq < 18)  freq *= 2;
+      while (freq > 320) freq *= 0.5;
+      // Nudge baseFreq toward the target harmonic pitch
+      // (keep some of the archetype character by blending 70% harmonic, 30% arch)
+      baseFreq = freq * 0.7 + rnd(...arch.sf) * 0.3;
+    }
+
+    // endFreq tracks proportionally so the pitch drop feels consistent
+    const freqRatio = baseFreq / rnd(...arch.sf); // how much we shifted
+    const endFreq   = Math.max(14, rnd(...arch.ef) * freqRatio * 0.7);
+
+    return {
+      archetype:  arch.name,
+      startFreq:  baseFreq,
+      endFreq:    endFreq,
+      decay:      rnd(...arch.dc),
+      pitchMult:  arch.pm + rnd(-0.3, 0.3),
+      pitchRamp:  rnd(0.012, 0.035),
+      clickType:  arch.ct,
+      clickGain:  arch.cg * rnd(0.7, 1.3),
+      clickDecay: rnd(0.010, 0.028),
+      vol:        rnd(0.72, 0.98),
+      k:          rnd(...arch.dk),
+      hasSub:     Math.random() < 0.35,
+      subRatio:   rnd(0.48, 0.52),
+      subVol:     rnd(0.15, 0.35),
+    };
+  }
+
+  const AUDIO_AHEAD = 0.015; // 15ms lookahead — prevents first-hit dropout
+
+  function play808(voice) {
+    const c = getCtx();
+    const now = c.currentTime + AUDIO_AHEAD;
+    const { startFreq, endFreq, decay, pitchMult, pitchRamp,
+            clickType, clickGain, clickDecay, vol, k,
+            hasSub, subRatio, subVol } = voice;
+
+    // ── Main pitch oscillator ──
+    const osc = c.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(startFreq * pitchMult, now);
+    osc.frequency.exponentialRampToValueAtTime(startFreq, now + pitchRamp);
+    osc.frequency.exponentialRampToValueAtTime(Math.max(endFreq, 10), now + decay);
+
+    const env = c.createGain();
+    env.gain.setValueAtTime(vol, now);
+    // Two-stage decay: fast initial punch, then long tail
+    const punchEnd = Math.min(decay * 0.15, 0.08);
+    env.gain.setValueAtTime(vol * 0.85, now + punchEnd);
+    env.gain.exponentialRampToValueAtTime(0.001, now + decay + 0.04);
+
+    // ── Click transient ──
+    const click = c.createOscillator();
+    click.type = clickType;
+    click.frequency.setValueAtTime(startFreq * (pitchMult + 2), now);
+    click.frequency.exponentialRampToValueAtTime(startFreq * 0.9, now + clickDecay);
+    const clickEnv = c.createGain();
+    clickEnv.gain.setValueAtTime(clickGain, now);
+    clickEnv.gain.exponentialRampToValueAtTime(0.001, now + clickDecay + 0.005);
+
+    // ── Optional sub-octave layer ──
+    let subOsc = null, subEnv = null;
+    if (hasSub) {
+      subOsc = c.createOscillator();
+      subOsc.type = 'sine';
+      subOsc.frequency.setValueAtTime(startFreq * subRatio * pitchMult, now);
+      subOsc.frequency.exponentialRampToValueAtTime(endFreq * subRatio, now + decay * 0.9);
+      subEnv = c.createGain();
+      subEnv.gain.setValueAtTime(subVol, now);
+      subEnv.gain.exponentialRampToValueAtTime(0.001, now + decay * 0.85);
+    }
+
+    // Mix all layers into kick bus
+    osc.connect(env);
+    click.connect(clickEnv);
+    env.connect(getKickDest());
+    clickEnv.connect(getKickDest());
+    if (hasSub && subOsc) { subOsc.connect(subEnv); subEnv.connect(getKickDest()); }
+
+    osc.start(now);   osc.stop(now + decay + 0.06);
+    click.start(now); click.stop(now + clickDecay + 0.01);
+    if (hasSub && subOsc) { subOsc.start(now); subOsc.stop(now + decay * 0.86); }
+  }
+
+  // ── Shared BPM clock at 110 BPM ──
+  // Base tick = 8th note. Each button fires every divTicks ticks.
+  // Ring-1 of each active button radiates 1 tick later (8th note offset).
+  // Ring-2 radiates 2 ticks later (quarter note offset).
+  // When two rings from different sources land on the same hex in the same tick:
+  //   ring1 + ring1  → hi-hat
+  //   ring1 + ring2, or ring2 + ring2 → snare
+  const BPM = 110;
+  const SIXTEENTH_MS = (60 / BPM) * 1000 / 4;  // ~136ms per 16th note
+  const EIGHTH_MS    = SIXTEENTH_MS * 2;         // ~272ms — used for ring offsets
+
+  // ── Rhythm generator ──
+  // Clock resolution: 16th notes at 110 BPM (~136ms per tick)
+  // Breakbeat vocabulary: ghost notes, syncopation, irregular groupings,
+  // odd-length patterns that phase against each other.
+  // Euclidean algorithm for mathematically even hit distribution.
+
+  function euclidean(hits, steps) {
+    if (hits <= 0) return new Array(steps).fill(false);
+    if (hits >= steps) return new Array(steps).fill(true);
+    let pattern = [], counts = [], remainders = [], divisor = steps - hits;
+    remainders.push(hits);
+    let level = 0;
+    while (remainders[level] > 1) {
+      counts.push(Math.floor(divisor / remainders[level]));
+      remainders.push(divisor % remainders[level]);
+      divisor = remainders[level];
+      level++;
+    }
+    counts.push(divisor);
+    function build(lv) {
+      if (lv === -1) pattern.push(false);
+      else if (lv === -2) pattern.push(true);
+      else {
+        for (let i = 0; i < counts[lv]; i++) build(lv - 1);
+        if (remainders[lv] !== 0) build(lv - 2);
+      }
+    }
+    build(level);
+    const first = pattern.indexOf(true);
+    return first > 0 ? [...pattern.slice(first), ...pattern.slice(0, first)] : pattern;
+  }
+
+  // ── Breakbeat pattern generator ──
+  // All patterns are in 16th-note steps.
+  // Lengths chosen to phase against each other:
+  //   16 = 1 bar, 32 = 2 bars, 12 = 3/4, 10 = 5/8, 14 = 7/4 half,
+  //   20 = 5/4, 24 = 3 bars of 4/4, 11 = prime (wildly phasing)
+  const PATTERN_LENGTHS_16 = [16, 16, 16, 32, 32, 12, 14, 20, 24, 10, 11];
+
+  // Classic breakbeat rhythmic cells (in 16th steps within a 16-step bar)
+  // These are real patterns from Amen break, Think break, Funky Drummer etc.
+  const BREAK_CELLS = [
+    // Amen-flavored: hit on 1, skip 2, hit 3, ghost 4, hit 9...
+    [0, 2, 4, 6, 9, 11, 14],
+    // Think break feel: heavy 1, syncopated middle
+    [0, 3, 6, 8, 11, 14],
+    // Funky drummer fragment
+    [0, 2, 6, 8, 10, 14],
+    // Broken triplet feel
+    [0, 3, 7, 10, 14],
+    // Bo Diddley / clave hybrid
+    [0, 3, 6, 9, 12, 14],
+    // Trap hi-hat style (very 16th note dense)
+    [0, 2, 3, 6, 8, 10, 11, 14],
+    // Sparse breaker
+    [0, 4, 11, 14],
+    // Offbeat-heavy
+    [1, 3, 5, 8, 11, 13],
+    // Syncopated push
+    [0, 2, 5, 8, 13],
+    // Ghost-note flavored (many hits, quiet ones handled by velocity — here all same)
+    [0, 1, 3, 4, 6, 8, 10, 11, 13, 14],
+  ];
+
+  function generatePattern() {
+    const len = PATTERN_LENGTHS_16[Math.floor(Math.random() * PATTERN_LENGTHS_16.length)];
+    const style = Math.floor(Math.random() * 8);
+    let steps = new Array(len).fill(false);
+
+    if (style === 0) {
+      // Pull a classic break cell and fit it into this pattern's length
+      const cell = BREAK_CELLS[Math.floor(Math.random() * BREAK_CELLS.length)];
+      cell.forEach(s => { if (s < len) steps[s] = true; });
+      // For longer patterns, maybe add a variation in bar 2
+      if (len >= 32) {
+        const cell2 = BREAK_CELLS[Math.floor(Math.random() * BREAK_CELLS.length)];
+        cell2.forEach(s => { if (16 + s < len) steps[16 + s] = true; });
+      }
+
+    } else if (style === 1) {
+      // Euclidean(3, len) — tresillo family, foundation of most breakbeats
+      steps = euclidean(3, len);
+
+    } else if (style === 2) {
+      // Euclidean(5, len) — cinquillo / funky drummer base
+      steps = euclidean(5, len);
+
+    } else if (style === 3) {
+      // Euclidean with random hit count (3–6), very sparse to somewhat busy
+      const hits = 3 + Math.floor(Math.random() * 4);
+      steps = euclidean(Math.min(hits, Math.floor(len * 0.55)), len);
+
+    } else if (style === 4) {
+      // Displaced backbeat: anchor on a non-obvious beat, then scatter 16ths around it
+      // The anchor is NOT on beat 1 — it's on beat 2 (step 4) or beat 3 (step 8)
+      const anchors = [4, 8, 10];
+      steps[anchors[Math.floor(Math.random() * anchors.length)] % len] = true;
+      // Scatter 2–4 hits on non-quarter-note positions
+      const nonBeats = Array.from({length: len}, (_, i) => i).filter(i => i % 4 !== 0);
+      nonBeats.sort(() => Math.random() - 0.5).slice(0, 2 + Math.floor(Math.random() * 3))
+        .forEach(p => { steps[p] = true; });
+
+    } else if (style === 5) {
+      // Broken triplet over 16ths: groups of 3 steps within a 16-step bar
+      // Creates that swung/shuffled breakbeat feel
+      const tripletPositions = [0, 3, 6, 9, 12, 15].filter(s => s < len);
+      tripletPositions.forEach(s => {
+        if (Math.random() < 0.65) steps[s] = true;
+        // Occasionally add the 16th just before the next triplet (ghost)
+        if (s + 2 < len && Math.random() < 0.3) steps[s + 2] = true;
+      });
+
+    } else if (style === 6) {
+      // Two-bar phrase with a fill on bar 2 — classic breakbeat structure
+      if (len >= 24) {
+        // Bar 1: simple sparse groove
+        const bar1 = euclidean(3, 16);
+        bar1.forEach((v, i) => { if (i < len) steps[i] = v; });
+        // Bar 2: variation — shift hits slightly or add extra 16th
+        const bar2 = euclidean(4, 16);
+        bar2.forEach((v, i) => { if (16 + i < len) steps[16 + i] = v; });
+      } else {
+        // Shorter: just use a break cell
+        const cell = BREAK_CELLS[Math.floor(Math.random() * BREAK_CELLS.length)];
+        cell.forEach(s => { if (s < len) steps[s] = true; });
+      }
+
+    } else {
+      // Stepped walk: irregular step sizes of 2, 3, or 5 16th notes
+      // Creates jagged, unpredictable rhythm — like an edited breakbeat
+      let pos = 0;
+      const stepSizes = [2, 2, 3, 3, 5]; // weighted toward small steps
+      while (pos < len) {
+        steps[pos] = true;
+        pos += stepSizes[Math.floor(Math.random() * stepSizes.length)];
+      }
+    }
+
+    // Randomly drop ~20% of hits for additional breathing room
+    steps = steps.map(v => v && Math.random() > 0.2);
+
+    // Safety
+    if (!steps.some(Boolean)) steps[0] = true;
+    return { steps, len };
+  }
+  let masterTick = 0;
+  let masterTimer = null;
+  const activeButtons = new Set();
+
+  // Per-hex ring tracker: hexKey → { r1: Set<sourceKey>, r2: Set<sourceKey> }
+  // Tracks WHICH source buttons are radiating to each hex, per ring.
+  // Collision only counts when rings from DIFFERENT source buttons meet.
+  let ringPressure = {};
+
+  function accumulateRing(hexKey, ringNum, sourceKey) {
+    if (!ringPressure[hexKey]) ringPressure[hexKey] = { r1: new Set(), r2: new Set() };
+    if (ringNum === 1) ringPressure[hexKey].r1.add(sourceKey);
+    else               ringPressure[hexKey].r2.add(sourceKey);
+  }
+
+  // ── JUNGLE PERCUSSION SYNTHESIS ──────────────────────────────────────────
+
+  function noiseBuffer(c, dur) {
+    const buf = c.createBuffer(1, Math.ceil(c.sampleRate * dur), c.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    return buf;
+  }
+
+  // Closed hi-hat — tight transient, 7–9kHz fizz
+  function playHihat() {
+    const c = getCtx(), now = c.currentTime + AUDIO_AHEAD;
+    const decay = 0.055 + Math.random() * 0.03;
+    const src = c.createBufferSource();
+    src.buffer = noiseBuffer(c, decay + 0.01);
+    const hpf = c.createBiquadFilter();
+    hpf.type = 'highpass'; hpf.frequency.value = 7500 + Math.random() * 1500;
+    const g = c.createGain();
+    g.gain.setValueAtTime(0.38 + Math.random() * 0.12, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + decay);
+    src.connect(hpf); hpf.connect(g); g.connect(getPercDest());
+    src.start(now);
+  }
+
+  // Snare — layered noise body + triangle snap, mid-length
+  function playSnare() {
+    const c = getCtx(), now = c.currentTime + AUDIO_AHEAD;
+    const decay = 0.13 + Math.random() * 0.06;
+    const src = c.createBufferSource();
+    src.buffer = noiseBuffer(c, decay + 0.02);
+    const hpf = c.createBiquadFilter();
+    hpf.type = 'highpass'; hpf.frequency.value = 1600 + Math.random() * 400;
+    const noiseGain = c.createGain();
+    noiseGain.gain.setValueAtTime(0.5 + Math.random() * 0.12, now);
+    noiseGain.gain.exponentialRampToValueAtTime(0.001, now + decay);
+    src.connect(hpf); hpf.connect(noiseGain);
+    const snap = c.createOscillator();
+    snap.type = 'triangle';
+    snap.frequency.setValueAtTime(220 + Math.random() * 60, now);
+    snap.frequency.exponentialRampToValueAtTime(80, now + 0.04);
+    const snapGain = c.createGain();
+    snapGain.gain.setValueAtTime(0.35 + Math.random() * 0.1, now);
+    snapGain.gain.exponentialRampToValueAtTime(0.001, now + 0.055);
+    snap.connect(snapGain); snap.start(now); snap.stop(now + 0.06);
+    const master = c.createGain(); master.gain.value = 0.78;
+    noiseGain.connect(master); snapGain.connect(master);
+    master.connect(getPercDest());
+    src.start(now);
+  }
+
+  // Flam — two near-simultaneous hits from the same source (r1 chasing r2).
+  // Grace note fires immediately at low vol, main hit follows ~30ms later.
+  function playFlam() {
+    const c = getCtx(), now = c.currentTime + AUDIO_AHEAD;
+    const grace = 0.028; // 28ms flam spread
+
+    function hit(t, vol, decay) {
+      const buf = c.createBuffer(1, Math.ceil(c.sampleRate * (decay + 0.02)), c.sampleRate);
+      const d = buf.getChannelData(0);
+      for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+      const src = c.createBufferSource(); src.buffer = buf;
+      const hpf = c.createBiquadFilter();
+      hpf.type = 'highpass'; hpf.frequency.value = 1400;
+      // Short sine tone for the stick attack
+      const osc = c.createOscillator();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(180, t);
+      osc.frequency.exponentialRampToValueAtTime(70, t + 0.04);
+      const oscGain = c.createGain();
+      oscGain.gain.setValueAtTime(vol * 0.45, t);
+      oscGain.gain.exponentialRampToValueAtTime(0.001, t + 0.05);
+      const noiseGain = c.createGain();
+      noiseGain.gain.setValueAtTime(vol, t);
+      noiseGain.gain.exponentialRampToValueAtTime(0.001, t + decay);
+      const master = c.createGain(); master.gain.value = 0.75;
+      src.connect(hpf); hpf.connect(noiseGain); noiseGain.connect(master);
+      osc.connect(oscGain); oscGain.connect(master);
+      master.connect(getPercDest());
+      src.start(t); src.stop(t + decay + 0.02);
+      osc.start(t); osc.stop(t + 0.06);
+    }
+
+    hit(now,         0.22, 0.08);  // grace note — soft, short
+    hit(now + grace, 0.55, 0.16);  // main hit — full snare body
+  }
+
+  // Ghost hit — very soft, muffled snare flutter (jungle ghost 16th)
+  function playGhost() {
+    const c = getCtx(), now = c.currentTime + AUDIO_AHEAD;
+    const decay = 0.06 + Math.random() * 0.04;
+    const src = c.createBufferSource();
+    src.buffer = noiseBuffer(c, decay + 0.01);
+    const bpf = c.createBiquadFilter();
+    bpf.type = 'bandpass'; bpf.frequency.value = 2200 + Math.random() * 800; bpf.Q.value = 1.2;
+    const g = c.createGain();
+    g.gain.setValueAtTime(0.18 + Math.random() * 0.08, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + decay);
+    src.connect(bpf); bpf.connect(g); g.connect(getPercDest());
+    src.start(now);
+  }
+
+  // Rimshot — very dry, sharp crack with short noise burst + high sine ping
+  function playRimshot() {
+    const c = getCtx(), now = c.currentTime + AUDIO_AHEAD;
+    // Noise crack
+    const src = c.createBufferSource();
+    src.buffer = noiseBuffer(c, 0.05);
+    const hpf = c.createBiquadFilter();
+    hpf.type = 'highpass'; hpf.frequency.value = 3500;
+    const noiseGain = c.createGain();
+    noiseGain.gain.setValueAtTime(0.55, now);
+    noiseGain.gain.exponentialRampToValueAtTime(0.001, now + 0.045);
+    src.connect(hpf); hpf.connect(noiseGain);
+    // High-pitched ping
+    const ping = c.createOscillator();
+    ping.type = 'sine';
+    ping.frequency.setValueAtTime(900 + Math.random() * 200, now);
+    ping.frequency.exponentialRampToValueAtTime(300, now + 0.03);
+    const pingGain = c.createGain();
+    pingGain.gain.setValueAtTime(0.5, now);
+    pingGain.gain.exponentialRampToValueAtTime(0.001, now + 0.03);
+    ping.connect(pingGain); ping.start(now); ping.stop(now + 0.035);
+    const master = c.createGain(); master.gain.value = 0.85;
+    noiseGain.connect(master); pingGain.connect(master);
+    master.connect(getPercDest());
+    src.start(now);
+  }
+
+  // Perc stab — pitched clave / woodblock feel, short and punchy
+  function playPercStab() {
+    const c = getCtx(), now = c.currentTime + AUDIO_AHEAD;
+    const freq = [400, 480, 560, 640, 720][Math.floor(Math.random() * 5)];
+    const osc = c.createOscillator();
+    osc.type = 'square';
+    osc.frequency.setValueAtTime(freq, now);
+    osc.frequency.exponentialRampToValueAtTime(freq * 0.55, now + 0.04);
+    const dist = c.createWaveShaper();
+    const curve = new Float32Array(128);
+    for (let i = 0; i < 128; i++) { const x = (i*2/128)-1; curve[i] = x / (1 + 8*Math.abs(x)); }
+    dist.curve = curve;
+    const g = c.createGain();
+    g.gain.setValueAtTime(0.55, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + 0.065);
+    osc.connect(dist); dist.connect(g); g.connect(getPercDest());
+    osc.start(now); osc.stop(now + 0.07);
+  }
+
+  // Open hat — triggered when 2 kicks collide on same tick
+  function playOpenHat() {
+    const c = getCtx(), now = c.currentTime + AUDIO_AHEAD;
+    const decay = 0.18 + Math.random() * 0.10;
+    const src = c.createBufferSource();
+    src.buffer = noiseBuffer(c, decay + 0.02);
+    const hpf = c.createBiquadFilter();
+    hpf.type = 'highpass'; hpf.frequency.value = 6500 + Math.random() * 1000;
+    const peak = c.createBiquadFilter();
+    peak.type = 'peaking'; peak.frequency.value = 9000; peak.Q.value = 1.8; peak.gain.value = 6;
+    const g = c.createGain();
+    g.gain.setValueAtTime(0.40 + Math.random() * 0.08, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + decay);
+    src.connect(hpf); hpf.connect(peak); peak.connect(g); g.connect(getPercDest());
+    src.start(now);
+  }
+
+  // Roll accent — open hat with metallic shimmer, slightly longer
+  function playRollAccent() {
+    const c = getCtx(), now = c.currentTime + AUDIO_AHEAD;
+    const decay = 0.12 + Math.random() * 0.08;
+    const src = c.createBufferSource();
+    src.buffer = noiseBuffer(c, decay + 0.02);
+    const hpf = c.createBiquadFilter();
+    hpf.type = 'highpass'; hpf.frequency.value = 6000;
+    const peak = c.createBiquadFilter();
+    peak.type = 'peaking'; peak.frequency.value = 10000; peak.Q.value = 2; peak.gain.value = 8;
+    const g = c.createGain();
+    g.gain.setValueAtTime(0.32 + Math.random() * 0.1, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + decay);
+    src.connect(hpf); hpf.connect(peak); peak.connect(g); g.connect(getPercDest());
+    src.start(now);
+  }
+
+  // ── Flash colors per collision type ──
+  const COLLISION_COLORS = {
+    hihat:      [180, 240, 255],  // icy cyan
+    snare:      [255, 255, 220],  // warm white
+    ghost:      [120, 100, 180],  // muted violet
+    rimshot:    [255, 180, 80],   // amber flash
+    percstab:   [80,  255, 180],  // acid mint
+    rollaccent: [220, 180, 255],  // soft lavender
+    flam:       [255, 220, 100],  // warm gold
+  };
+
+  function flashCollision(hexKey, type) {
+    const nb = hexMap[hexKey];
+    if (!nb || nb.active) return;
+    const [R, G, B] = COLLISION_COLORS[type] || [255, 255, 255];
+    const intensity = type === 'ghost' ? 0.28 : 0.52;
+    setHexColor(nb, R, G, B, intensity);
+    nb.el.classList.remove('neighbor-pulse', 'neighbor-pulse-2');
+    void nb.el.offsetWidth;
+    nb.el.classList.add(type === 'ghost' ? 'neighbor-pulse-2' : 'neighbor-pulse');
+    const dur = type === 'ghost' ? 300 : 380;
+    setTimeout(() => {
+      nb.el.classList.remove('neighbor-pulse', 'neighbor-pulse-2');
+      if (!nb.active) setHexColor(nb, 0, 0, 0, 0.0);
+    }, dur);
+  }
+
+  // Track recent hi-hat hexes for roll detection
+  const recentHihats = {}; // hexKey → last masterTick that triggered hihat
+
+  function processTick() {
+    masterTick++;
+
+    // Collect all buttons that land on a hit this tick
+    const hitsThisTick = [];
+    activeButtons.forEach(key => {
+      const btn = hexMap[key];
+      if (!btn || !btn.active) return;
+      if (btn.pattern.steps[masterTick % btn.pattern.len]) hitsThisTick.push(btn);
+    });
+
+    // All kicks fire — limiter handles peaks.
+    // Add open hat accent when 2+ land on the same tick.
+    hitsThisTick.forEach(btn => play808(btn.voice));
+    if (hitsThisTick.length >= 2) playOpenHat();
+
+    hitsThisTick.forEach(btn => {
+      visualFlash(btn);
+
+      const ring1Keys = getNeighborKeys(btn.col, btn.row);
+      const srcKey = btn.key;
+      setTimeout(() => {
+        ring1Keys.forEach(k => accumulateRing(k, 1, srcKey));
+        flushCollisions();
+      }, EIGHTH_MS * 1 - 10);
+
+      const ring1Set = new Set([btn.key, ...ring1Keys]);
+      const ring2Keys = [];
+      ring1Keys.forEach(nk => {
+        const nb = hexMap[nk];
+        if (!nb) return;
+        getNeighborKeys(nb.col, nb.row).forEach(k => {
+          if (!ring1Set.has(k) && !ring2Keys.includes(k)) ring2Keys.push(k);
+        });
+      });
+      setTimeout(() => {
+        ring2Keys.forEach(k => accumulateRing(k, 2, srcKey));
+        flushCollisions();
+      }, EIGHTH_MS * 2 - 10);
+    });
+  }
+
+  function flushCollisions() {
+    clearTimeout(flushCollisions._t);
+    flushCollisions._t = setTimeout(() => {
+      Object.entries(ringPressure).forEach(([key, p]) => {
+        const r1 = p.r1; // Set<sourceKey>
+        const r2 = p.r2;
+        const r1arr = [...r1], r2arr = [...r2];
+        const crossR1R2 = r1arr.some(s1 => r2arr.some(s2 => s1 !== s2));
+
+        // ── RIMSHOT: 3+ ring-1 sources converge — dense, dry crack ──
+        if (r1.size >= 3) {
+          playRimshot();
+          flashCollision(key, 'rimshot');
+          return;
+        }
+
+        // ── PERC STAB: r1 from 2 sources AND r2 from a 3rd different source ──
+        // Three-way cross = clave-like pitched accent
+        if (r1.size >= 2 && r2.size >= 1) {
+          const thirdSource = r2arr.find(s => !r1.has(s));
+          if (thirdSource) {
+            playPercStab();
+            flashCollision(key, 'percstab');
+            return;
+          }
+        }
+
+        // ── HI-HAT: 2 ring-1 sources — tight closed brush ──
+        if (r1.size >= 2) {
+          // Roll accent: same hex fired hihat recently (rapid repeat = roll)
+          const lastTick = recentHihats[key] || -99;
+          if (masterTick - lastTick <= 2) {
+            playRollAccent();
+            flashCollision(key, 'rollaccent');
+          } else {
+            playHihat();
+            flashCollision(key, 'hihat');
+          }
+          recentHihats[key] = masterTick;
+          return;
+        }
+
+        // ── FLAM: r1 and r2 from the SAME source — wave chasing itself ──
+        // One kick's inner ring catches up with its own outer ring at this hex.
+        const sameSourceFlam = r1arr.some(s => r2arr.includes(s));
+        if (r1.size === 1 && r2.size >= 1 && sameSourceFlam && !crossR1R2) {
+          playFlam();
+          flashCollision(key, 'flam');
+          return;
+        }
+
+        // ── SNARE: r1 × r2 cross-source — asymmetric wave collision ──
+        if (r1.size >= 1 && r2.size >= 1 && crossR1R2) {
+          playSnare();
+          flashCollision(key, 'snare');
+          return;
+        }
+
+        // ── GHOST: r2 from 2+ sources, no r1 collision — soft flutter ──
+        if (r2.size >= 2 && r1.size === 0) {
+          playGhost();
+          flashCollision(key, 'ghost');
+        }
+      });
+      ringPressure = {};
+    }, 8);
+  }
+
+  function startMasterClock() {
+    if (masterTimer !== null) return;
+    masterTick = 0;
+    masterTimer = setInterval(processTick, SIXTEENTH_MS);
+  }
+
+  function stopMasterClock() {
+    clearInterval(masterTimer);
+    masterTimer = null;
+    masterTick = 0;
+    ringPressure = {};
+    // Reset tonal root when everything is silenced, so next session starts fresh
+    rootPitch = null;
+    usedIntervals = [];
+  }
+
+  function startLoop(key, btn) {
+    // Generate a permanent rhythmic pattern on first activation
+    if (!btn.pattern) {
+      btn.pattern = generatePattern();
+    }
+    activeButtons.add(key);
+    startMasterClock();
+    checkThumbstick();
+  }
+
+  function stopLoop(key) {
+    activeButtons.delete(key);
+    if (activeButtons.size === 0) {
+      stopMasterClock();
+      // All drums cleared — if crawler is paused or idle, reset it fully
+      if (!CRAWLER.active) resetCrawler();
+    }
+    checkThumbstick();
+  }
+
+  // ══════════════════════════════════════════════════════
+  //  THUMBSTICK CHAOS PAD
+  //  Appears after 4 kicks active. Hex geometry joystick.
+  //  6 axes = filter / reverb / delay (3 bipolar pairs)
+  // ══════════════════════════════════════════════════════
+
+  const STICK_RADIUS = 52;  // outer gate radius (px)
+  const KNOB_RADIUS  = 22;  // draggable knob radius
+  const MAX_TRAVEL   = STICK_RADIUS - KNOB_RADIUS - 4;
+
+  let stickVisible   = false;
+  let stickDragging  = false;
+  let stickX = 0, stickY = 0;           // current knob offset from center
+  let stickPointerId = null;
+
+  const stickWrap = document.getElementById('thumbstick-wrap');
+  const stickGate = document.getElementById('stick-gate');
+  const stickPad  = document.getElementById('stick-pad');
+  const stickKnob = document.getElementById('stick-knob');
+
+  // ── Joystick SVG helpers ──
+  const NS = 'http://www.w3.org/2000/svg';
+  function svgEl(tag, attrs) {
+    const el = document.createElementNS(NS, tag);
+    Object.entries(attrs).forEach(([k,v]) => el.setAttribute(k, v));
+    return el;
+  }
+  function hexPoly(r, phase=0) {
+    return Array.from({length:6}, (_,i) => {
+      const a = (Math.PI/3)*i + phase;
+      return `${r*Math.cos(a)},${r*Math.sin(a)}`;
+    }).join(' ');
+  }
+
+  // Build gate: 6 directional arrows with effect labels
+  (function buildStickGate() {
+    const R = STICK_RADIUS;
+    const vb = R * 2.8;
+    stickGate.setAttribute('width',  vb*2);
+    stickGate.setAttribute('height', vb*2);
+    stickGate.setAttribute('viewBox', `${-vb} ${-vb} ${vb*2} ${vb*2}`);
+    stickGate.style.cssText = `position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);overflow:visible;pointer-events:none;`;
+
+    // 6 arrows: angle, label, color (opposite pairs share an effect)
+    const arrows = [
+      { a: -Math.PI/2,     label: 'FILTER +', color: 'rgba(120,255,80,0.85)'  },  // up
+      { a: -Math.PI/6,     label: 'DELAY +',  color: 'rgba(80,180,255,0.85)'  },  // upper-right
+      { a:  Math.PI/6,     label: 'DIST +',   color: 'rgba(255,80,200,0.85)'  },  // lower-right
+      { a:  Math.PI/2,     label: 'FILTER −', color: 'rgba(120,255,80,0.45)'  },  // down
+      { a:  Math.PI*(5/6), label: 'DELAY −',  color: 'rgba(80,180,255,0.45)'  },  // lower-left
+      { a: -Math.PI*(5/6), label: 'DIST −',   color: 'rgba(255,80,200,0.45)'  },  // upper-left
+    ];
+
+    const arrowStart = KNOB_RADIUS + 8;  // arrow tail starts just past knob
+    const arrowEnd   = R + 2;            // arrow tip at gate edge
+    const headLen    = 7;                // arrowhead size
+    const headAngle  = Math.PI / 6;      // 30° spread
+
+    arrows.forEach(ax => {
+      const cos = Math.cos(ax.a), sin = Math.sin(ax.a);
+      const x1 = arrowStart * cos, y1 = arrowStart * sin;
+      const x2 = arrowEnd   * cos, y2 = arrowEnd   * sin;
+
+      // Shaft
+      stickGate.appendChild(svgEl('line', {
+        x1, y1, x2, y2,
+        stroke: ax.color,
+        'stroke-width': '1.4',
+        'stroke-linecap': 'round'
+      }));
+
+      // Arrowhead (two lines)
+      const tip = ax.a + Math.PI; // direction from tip back toward shaft
+      const lx1 = x2 + headLen * Math.cos(tip - headAngle);
+      const ly1 = y2 + headLen * Math.sin(tip - headAngle);
+      const lx2 = x2 + headLen * Math.cos(tip + headAngle);
+      const ly2 = y2 + headLen * Math.sin(tip + headAngle);
+      stickGate.appendChild(svgEl('line', {
+        x1: x2, y1: y2, x2: lx1, y2: ly1,
+        stroke: ax.color, 'stroke-width': '1.4', 'stroke-linecap': 'round'
+      }));
+      stickGate.appendChild(svgEl('line', {
+        x1: x2, y1: y2, x2: lx2, y2: ly2,
+        stroke: ax.color, 'stroke-width': '1.4', 'stroke-linecap': 'round'
+      }));
+
+      // Label beyond arrowhead
+      const lr = arrowEnd + 13;
+      const txt = svgEl('text', {
+        x: lr * cos, y: lr * sin,
+        'text-anchor': 'middle',
+        'dominant-baseline': 'middle',
+        'font-family': 'Share Tech Mono, monospace',
+        'font-size': '7',
+        fill: ax.color,
+        'letter-spacing': '0.5'
+      });
+      txt.textContent = ax.label;
+      stickGate.appendChild(txt);
+    });
+  })();
+
+  // Build knob: hexagonal, matching button surface language
+  (function buildKnob() {
+    const R = KNOB_RADIUS;
+    const vb = R + 4;
+    stickKnob.setAttribute('width',  vb*2);
+    stickKnob.setAttribute('height', vb*2);
+    stickKnob.setAttribute('viewBox', `${-vb} ${-vb} ${vb*2} ${vb*2}`);
+    stickKnob.style.cssText = `display:block;`;
+
+    const defs = svgEl('defs', {});
+
+    // Radial depth gradient — matches hex button surface
+    const rg = svgEl('radialGradient', {id:'kg', cx:'42%', cy:'35%', r:'70%'});
+    rg.appendChild(svgEl('stop', {offset:'0%',   'stop-color':'rgba(40,30,60,1)'}));   // cold specular
+    rg.appendChild(svgEl('stop', {offset:'55%',  'stop-color':'rgba(18,14,28,1)'}));    // body
+    rg.appendChild(svgEl('stop', {offset:'100%', 'stop-color':'rgba(4,3,8,1)'}));       // void rim
+    defs.appendChild(rg);
+
+    // Linear bevel — top-left catchlight
+    const lg = svgEl('linearGradient', {id:'klg', x1:'15%', y1:'10%', x2:'85%', y2:'90%'});
+    lg.appendChild(svgEl('stop', {offset:'0%',   'stop-color':'rgba(255,180,80,0.14)'}));
+    lg.appendChild(svgEl('stop', {offset:'45%',  'stop-color':'rgba(255,255,255,0.00)'}));
+    lg.appendChild(svgEl('stop', {offset:'100%', 'stop-color':'rgba(0,0,0,0.35)'}));
+    defs.appendChild(lg);
+
+    stickKnob.appendChild(defs);
+
+    // Base hex fill
+    stickKnob.appendChild(svgEl('polygon', {
+      points: hexPoly(R),
+      fill: 'url(#kg)',
+      stroke: 'rgba(180,80,255,0.7)',
+      'stroke-width': '1.2'
+    }));
+
+    // Bevel overlay
+    stickKnob.appendChild(svgEl('polygon', {
+      points: hexPoly(R),
+      fill: 'url(#klg)',
+      stroke: 'none',
+      'pointer-events': 'none'
+    }));
+
+    // Inner hex ring — engraved look
+    stickKnob.appendChild(svgEl('polygon', {
+      points: hexPoly(R * 0.55),
+      fill: 'none',
+      stroke: 'rgba(160,60,255,0.25)',
+      'stroke-width': '0.8'
+    }));
+
+    // Center ember dot
+    stickKnob.appendChild(svgEl('circle', {
+      cx:0, cy:0, r:3,
+      fill: 'rgba(140,255,80,0.9)'
+    }));
+
+    stickPad.style.cssText = `position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);touch-action:none;cursor:grab;`;
+    stickKnob.style.filter = 'drop-shadow(0 0 12px rgba(160,60,255,0.65)) drop-shadow(0 2px 4px rgba(0,0,0,0.9))';
+  })();
+
+  let stickCenterKey = null;
+  let stickZoneKeys  = null;
+  let stickPickCx = null, stickPickCy = null; // saved before zone hexes are deleted
+
+  // Find the bottom-right hex with a full ring of neighbors — called BEFORE buildGrid
+  // so we know which hexes to omit. Uses hexMap which is populated during the build loop
+  // incrementally, so we call this AFTER the loop but use it to draw the well separately.
+  // For skipping during build, we pre-compute using grid math (no hexMap needed).
+  function computeStickZone() {
+    // Sort btns by bottom-right proximity, pick first with all 6 neighbors in hexMap
+    const sorted = [...btns].sort((a, b) => (b.cx + b.cy) - (a.cx + a.cy));
+    let pick = null;
+    for (const btn of sorted) {
+      const nkeys = getNeighborKeys(btn.col, btn.row);
+      if (nkeys.every(k => hexMap[k])) { pick = btn; break; }
+    }
+    if (!pick) pick = sorted[0];
+    stickCenterKey = pick.key;
+    stickZoneKeys  = new Set([pick.key, ...getNeighborKeys(pick.col, pick.row)]);
+    return pick;
+  }
+
+  function placeThumbstick() {
+    // coords saved during buildGrid before zone hexes were removed
+    if (stickPickCx === null) return;
+    stickWrap.style.left      = stickPickCx + 'px';
+    stickWrap.style.top       = stickPickCy + 'px';
+    stickWrap.style.transform = 'translate(-50%, -50%)';
+    stickWrap.classList.add('visible');
+    stickVisible = true;
+  }
+
+  function drawStickWell(pick) {
+    // Remove any existing well
+    const old = document.getElementById('stick-well');
+    if (old) old.remove();
+
+    const sqrt3 = Math.sqrt(3);
+    const wellSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    wellSvg.id = 'stick-well';
+    wellSvg.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;pointer-events:none;z-index:10;overflow:visible;';
+
+    const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+
+    // Radial gradient — dark inset with subtle inner glow at edge
+    const gid = 'well-grad';
+    const grad = document.createElementNS('http://www.w3.org/2000/svg', 'radialGradient');
+    grad.id = gid;
+    grad.setAttribute('cx','50%'); grad.setAttribute('cy','50%'); grad.setAttribute('r','50%');
+    grad.setAttribute('gradientUnits','userSpaceOnUse');
+    grad.setAttribute('cx', pick.cx); grad.setAttribute('cy', pick.cy);
+    grad.setAttribute('r', hexR * 2.8);
+    const gs1 = document.createElementNS('http://www.w3.org/2000/svg','stop');
+    gs1.setAttribute('offset','0%');   gs1.setAttribute('stop-color','rgba(4,2,1,0.96)');
+    const gs2 = document.createElementNS('http://www.w3.org/2000/svg','stop');
+    gs2.setAttribute('offset','75%');  gs2.setAttribute('stop-color','rgba(8,4,2,0.97)');
+    const gs3 = document.createElementNS('http://www.w3.org/2000/svg','stop');
+    gs3.setAttribute('offset','100%'); gs3.setAttribute('stop-color','rgba(30,15,6,0.92)');
+    grad.appendChild(gs1); grad.appendChild(gs2); grad.appendChild(gs3);
+    defs.appendChild(grad);
+    wellSvg.appendChild(defs);
+
+    // Draw each of the 7 zone hexes as a filled recessed polygon
+    const colSpacing = hexR * 1.5 + GAP;
+    const rowSpacing = hexR * sqrt3 + GAP;
+    const allZoneKeys = [pick.key, ...getNeighborKeys(pick.col, pick.row)];
+
+    allZoneKeys.forEach(key => {
+      const btn = hexMap[key];
+      if (!btn) return;
+      // Hex polygon points in screen space
+      const pts = hexPoints(hexR - GAP / 2 + 1); // slightly larger to close gaps
+      const poly = document.createElementNS('http://www.w3.org/2000/svg','polygon');
+      const ptsStr = pts.map(([x,y]) => `${btn.cx+x},${btn.cy+y}`).join(' ');
+      poly.setAttribute('points', ptsStr);
+      poly.setAttribute('fill', `url(#${gid})`);
+      poly.setAttribute('stroke', 'rgba(120,40,220,0.12)');
+      poly.setAttribute('stroke-width', '0.8');
+      wellSvg.appendChild(poly);
+
+      // Inner shadow ring — makes it look recessed/inlaid
+      const inner = document.createElementNS('http://www.w3.org/2000/svg','polygon');
+      const innerPts = hexPoints(hexR - GAP / 2 - 2);
+      inner.setAttribute('points', innerPts.map(([x,y]) => `${btn.cx+x},${btn.cy+y}`).join(' '));
+      inner.setAttribute('fill', 'none');
+      inner.setAttribute('stroke', 'rgba(0,0,0,0.5)');
+      inner.setAttribute('stroke-width', '2');
+      wellSvg.appendChild(inner);
+    });
+
+    // Outer border ring around the whole cluster
+    // Draw as a slightly enlarged version of all 7 hexes merged visually via stroke
+    allZoneKeys.forEach(key => {
+      const btn = hexMap[key];
+      if (!btn) return;
+      const pts = hexPoints(hexR + GAP / 2);
+      const border = document.createElementNS('http://www.w3.org/2000/svg','polygon');
+      border.setAttribute('points', pts.map(([x,y]) => `${btn.cx+x},${btn.cy+y}`).join(' '));
+      border.setAttribute('fill', 'none');
+      border.setAttribute('stroke', 'rgba(140,40,255,0.16)');
+      border.setAttribute('stroke-width', '1');
+      wellSvg.appendChild(border);
+    });
+
+    stage.appendChild(wellSvg);
+  }
+
+  function hideThumbstick() {
+    stickWrap.classList.remove('visible');
+    stickWrap.style.display = 'none';
+    stickVisible = false;
+    // Reset FX to neutral
+    fx.filter = 0.5; fx.delay = 0; fx.dist = 0;
+    applyFxState();
+    updateFxDots();
+  }
+
+  // Map joystick XY to 6 hex axes and drive FX
+  function updateStickFx() {
+    const dist = Math.sqrt(stickX*stickX + stickY*stickY);
+    const norm = Math.min(dist / MAX_TRAVEL, 1.0); // 0–1
+    const angle = Math.atan2(stickY, stickX);      // -π to π
+
+    // Decompose into the 3 bipolar hex axes:
+    // Axis 0: vertical   (-90° up / +90° down)   → filter open/close
+    // Axis 1: upper-right (-30°) / lower-left     → delay up/down
+    // Axis 2: lower-right (+30°) / upper-left     → distortion up/down
+
+    const axes = [
+      { angle: -Math.PI/2 },   // up   = filter bright
+      { angle: -Math.PI/6 },   // upper-right = delay up
+      { angle:  Math.PI/6 },   // lower-right = distortion up
+    ];
+
+    axes.forEach((ax, i) => {
+      const projection = Math.cos(angle - ax.angle) * norm;
+      if      (i === 0) fx.filter = 0.5 + projection * 0.5;  // 0–1
+      else if (i === 1) fx.delay  = Math.max(0, projection);  // 0–1
+      else if (i === 2) fx.dist   = Math.max(0, projection);  // 0–1
+    });
+
+    applyFxState();
+    updateFxDots();
+
+    // Visual: knob position
+    stickPad.style.transform = `translate(calc(-50% + ${stickX}px), calc(-50% + ${stickY}px))`;
+
+    // Glow intensity on gate based on dist
+    stickGate.style.filter = norm > 0.1
+      ? `drop-shadow(0 0 ${6 + norm * 14}px rgba(160,60,255,${0.3 + norm * 0.6}))`
+      : '';
+  }
+
+  function updateFxDots() {
+    document.getElementById('dot-filter').classList.toggle('active', Math.abs(fx.filter - 0.5) > 0.15);
+    document.getElementById('dot-delay').classList.toggle('active',  fx.delay > 0.1);
+    document.getElementById('dot-dist').classList.toggle('active',   fx.dist  > 0.1);
+  }
+
+  // Return knob to center with spring
+  function springReturn() {
+    if (stickDragging) return;
+    const spring = () => {
+      if (stickDragging) return;
+      stickX *= 0.78; stickY *= 0.78;
+      if (Math.abs(stickX) < 0.5 && Math.abs(stickY) < 0.5) {
+        stickX = 0; stickY = 0;
+        fx.filter = 0.5; fx.delay = 0; fx.dist = 0;
+      }
+      updateStickFx();
+      if (stickX !== 0 || stickY !== 0) requestAnimationFrame(spring);
+    };
+    requestAnimationFrame(spring);
+  }
+
+  // Pointer events on knob
+  stickPad.addEventListener('pointerdown', e => {
+    e.preventDefault(); e.stopPropagation();
+    stickDragging = true;
+    stickPointerId = e.pointerId;
+    stickPad.setPointerCapture(e.pointerId);
+    stickPad.style.cursor = 'grabbing';
+    stickKnob.style.filter = 'drop-shadow(0 0 20px rgba(180,80,255,1.0)) drop-shadow(0 0 44px rgba(120,40,255,0.6))';
+  });
+
+  stickPad.addEventListener('pointermove', e => {
+    if (!stickDragging || e.pointerId !== stickPointerId) return;
+    e.preventDefault(); e.stopPropagation();
+    // Get offset from gate center
+    const rect = stickWrap.getBoundingClientRect();
+    const cx = rect.left + rect.width  / 2;
+    const cy = rect.top  + rect.height / 2;
+    let dx = e.clientX - cx;
+    let dy = e.clientY - cy;
+    // Clamp to circle
+    const dist = Math.sqrt(dx*dx + dy*dy);
+    if (dist > MAX_TRAVEL) { dx *= MAX_TRAVEL/dist; dy *= MAX_TRAVEL/dist; }
+    stickX = dx; stickY = dy;
+    updateStickFx();
+  });
+
+  stickPad.addEventListener('pointerup',    e => { stickDragging = false; stickPad.style.cursor = 'grab'; stickKnob.style.filter = 'drop-shadow(0 0 12px rgba(160,60,255,0.65)) drop-shadow(0 2px 4px rgba(0,0,0,0.9))'; springReturn(); });
+  stickPad.addEventListener('pointercancel',e => { stickDragging = false; springReturn(); });
+
+  // Thumbstick is always visible once the grid is shown
+  function checkThumbstick() { /* no-op: always visible */ }
+
+  const GAP = 4;
+  let btns = [];
+  let COLS, ROWS, hexR;
+  const hexMap = {};
+
+  function hexPoints(r) {
+    const pts = [];
+    for (let i = 0; i < 6; i++) {
+      const angle = (Math.PI / 180) * (60 * i);
+      pts.push([r * Math.cos(angle), r * Math.sin(angle)]);
+    }
+    return pts;
+  }
+
+  function pointsAttr(pts, cx, cy) {
+    return pts.map(([x,y]) => `${cx+x},${cy+y}`).join(' ');
+  }
+
+  function buildGrid() {
+    stage.innerHTML = '';
+    btns = [];
+    Object.keys(hexMap).forEach(k => delete hexMap[k]);
+
+    const W = window.innerWidth;
+    const H = window.innerHeight;
+    const sqrt3 = Math.sqrt(3);
+
+    let bestScore = 0;
+    for (let testCols = 4; testCols <= 9; testCols++) {
+      const r = (W - GAP * (testCols - 1)) / (1.5 * (testCols - 1) + 2);
+      const rowSp = r * sqrt3 + GAP;
+      const testRows = Math.floor((H + GAP) / rowSp);
+      const score = testCols * testRows * r;
+      if (score > bestScore) {
+        bestScore = score;
+        COLS = testCols; ROWS = testRows; hexR = r;
+      }
+    }
+
+    const colSpacing = hexR * 1.5 + GAP;
+    const rowSpacing = hexR * sqrt3 + GAP;
+    const totalW = colSpacing * (COLS - 1) + hexR * 2;
+    const totalH = rowSpacing * (ROWS - 1) + hexR * sqrt3 + rowSpacing / 2;
+    const offsetX = (W - totalW) / 2 + hexR;
+    const offsetY = (H - totalH) / 2 + hexR * sqrt3 / 2;
+
+    const pts     = hexPoints(hexR - GAP / 2);
+    const ringPts = hexPoints(hexR * 0.95);
+    const svgNS   = 'http://www.w3.org/2000/svg';
+
+    for (let col = 0; col < COLS; col++) {
+      for (let row = 0; row < ROWS; row++) {
+        const cx = offsetX + col * colSpacing;
+        const cy = offsetY + row * rowSpacing + (col % 2 === 1 ? rowSpacing / 2 : 0);
+        if (cx < -hexR || cx > W + hexR || cy < -hexR || cy > H + hexR) continue;
+
+        const key = `${col},${row}`;
+        const div = document.createElement('div');
+        div.className = 'hex';
+        div.style.left   = (cx - hexR) + 'px';
+        div.style.top    = (cy - hexR * sqrt3 / 2) + 'px';
+        div.style.width  = (hexR * 2) + 'px';
+        div.style.height = (hexR * sqrt3) + 'px';
+
+        const lcx = hexR, lcy = hexR * sqrt3 / 2;
+        const svg = document.createElementNS(svgNS, 'svg');
+        svg.setAttribute('viewBox', `0 0 ${hexR*2} ${hexR*sqrt3}`);
+
+        const defs = document.createElementNS(svgNS, 'defs');
+
+        // Layer 1: radial depth gradient (center slightly lighter, edge dark)
+        const gradId = `g${col}_${row}`;
+        const grad = document.createElementNS(svgNS, 'radialGradient');
+        grad.id = gradId;
+        grad.setAttribute('cx', '50%'); grad.setAttribute('cy', '45%');
+        grad.setAttribute('r', '72%');
+        grad.setAttribute('gradientUnits', 'objectBoundingBox');
+        const s1 = document.createElementNS(svgNS, 'stop');
+        s1.setAttribute('offset', '0%');    // specular center
+        const s2 = document.createElementNS(svgNS, 'stop');
+        s2.setAttribute('offset', '55%');   // main body color
+        const s3 = document.createElementNS(svgNS, 'stop');
+        s3.setAttribute('offset', '100%');  // dark rim
+        grad.appendChild(s1); grad.appendChild(s2); grad.appendChild(s3);
+
+        // Layer 2: linear bevel — top-left catch light, bottom-right shadow
+        const bevId = `b${col}_${row}`;
+        const bev = document.createElementNS(svgNS, 'linearGradient');
+        bev.id = bevId;
+        bev.setAttribute('x1', '15%'); bev.setAttribute('y1', '10%');
+        bev.setAttribute('x2', '85%'); bev.setAttribute('y2', '90%');
+        const b1 = document.createElementNS(svgNS, 'stop');
+        b1.setAttribute('offset', '0%');
+        b1.setAttribute('stop-color', 'rgba(255,255,255,0.11)');
+        const b2 = document.createElementNS(svgNS, 'stop');
+        b2.setAttribute('offset', '45%');
+        b2.setAttribute('stop-color', 'rgba(255,255,255,0.00)');
+        const b3 = document.createElementNS(svgNS, 'stop');
+        b3.setAttribute('offset', '100%');
+        b3.setAttribute('stop-color', 'rgba(0,0,0,0.28)');
+        bev.appendChild(b1); bev.appendChild(b2); bev.appendChild(b3);
+
+        defs.appendChild(grad); defs.appendChild(bev);
+        svg.appendChild(defs);
+
+        // Base fill polygon
+        const poly = document.createElementNS(svgNS, 'polygon');
+        poly.setAttribute('points', pointsAttr(pts, lcx, lcy));
+        poly.setAttribute('fill', `url(#${gradId})`);
+        poly.setAttribute('stroke', 'rgba(80,70,110,0.55)');
+        poly.setAttribute('stroke-width', '1.0');
+        poly.dataset.cellWall = '1'; // tag for inactive/active switching
+        poly.classList.add('hex-face');
+
+        // Bevel overlay polygon (same shape, no pointer events)
+        const bevPoly = document.createElementNS(svgNS, 'polygon');
+        bevPoly.setAttribute('points', pointsAttr(pts, lcx, lcy));
+        bevPoly.setAttribute('fill', `url(#${bevId})`);
+        bevPoly.setAttribute('pointer-events', 'none');
+        bevPoly.setAttribute('stroke', 'none');
+
+        // Top edge highlight — 1px lighter stroke on upper-left edges only
+        const edgeId = `e${col}_${row}`;
+        const edgeMask = document.createElementNS(svgNS, 'linearGradient');
+        edgeMask.id = edgeId;
+        edgeMask.setAttribute('x1','0%'); edgeMask.setAttribute('y1','0%');
+        edgeMask.setAttribute('x2','0%'); edgeMask.setAttribute('y2','100%');
+        const e1 = document.createElementNS(svgNS, 'stop');
+        e1.setAttribute('offset','0%'); e1.setAttribute('stop-color','rgba(255,255,255,0.15)');
+        const e2 = document.createElementNS(svgNS, 'stop');
+        e2.setAttribute('offset','100%'); e2.setAttribute('stop-color','rgba(255,255,255,0.0)');
+        edgeMask.appendChild(e1); edgeMask.appendChild(e2);
+        defs.appendChild(edgeMask);
+
+        const edgePoly = document.createElementNS(svgNS, 'polygon');
+        edgePoly.setAttribute('points', pointsAttr(pts, lcx, lcy));
+        edgePoly.setAttribute('fill', 'none');
+        edgePoly.setAttribute('stroke', `url(#${edgeId})`);
+        edgePoly.setAttribute('stroke-width', '1');
+        edgePoly.setAttribute('pointer-events', 'none');
+
+        const ring = document.createElementNS(svgNS, 'polygon');
+        ring.setAttribute('points', pointsAttr(ringPts, lcx, lcy));
+        ring.classList.add('hex-ring');
+
+        svg.appendChild(poly); svg.appendChild(bevPoly);
+        svg.appendChild(edgePoly); svg.appendChild(ring);
+        div.appendChild(svg); stage.appendChild(div);
+
+        const btnObj = { el: div, poly, ring, s1, s2, s3, col, row, key, voice: null, active: false, cx, cy };
+        setHexColor(btnObj, 0, 0, 0, 0.0); // start as empty cell
+        btns.push(btnObj);
+        hexMap[key] = btnObj;
+        window._btnByKey = hexMap; // alias for master clock
+      }
+    }
+    // Assign per-hex colors now that all btns exist and neighbor lookup works
+    assignHexColors(btns);
+
+    // Remove the 7 joystick zone hexes from the DOM and data structures
+    // (computed now that hexMap is fully populated)
+    const sorted = [...btns].sort((a, b) => (b.cx + b.cy) - (a.cx + a.cy));
+    let stickPick = null;
+    for (const btn of sorted) {
+      const nkeys = getNeighborKeys(btn.col, btn.row);
+      if (nkeys.every(k => hexMap[k])) { stickPick = btn; break; }
+    }
+    if (stickPick) {
+      stickPickCx = stickPick.cx;  // save before deletion
+      stickPickCy = stickPick.cy;
+      const zoneKeys = [stickPick.key, ...getNeighborKeys(stickPick.col, stickPick.row)];
+      // Draw well BEFORE removing hexes so drawStickWell can read their positions
+      drawStickWell(stickPick);
+      zoneKeys.forEach(k => {
+        const b = hexMap[k];
+        if (!b) return;
+        b.el.remove();
+        delete hexMap[k];
+        const idx = btns.indexOf(b);
+        if (idx !== -1) btns.splice(idx, 1);
+      });
+    }
+
+    // Init crawler at top-left hex after grid is ready
+    setTimeout(initCrawler, 50);
+  }
+
+  const BASE_R = 18, BASE_G = 16, BASE_B = 24;
+  function setHexColor(btn, R, G, B, intensity) {
+    if (intensity === undefined) intensity = 1.0;
+    const lerp = (a, b, t) => Math.round(a + (b - a) * t);
+
+    if (intensity < 0.05) {
+      // ── Empty cell: transparent fill, thin wax-wall stroke ──
+      btn.el.style.setProperty('--r', BASE_R);
+      btn.el.style.setProperty('--g', BASE_G);
+      btn.el.style.setProperty('--b', BASE_B);
+      btn.s1 && btn.s1.setAttribute('stop-color', 'rgba(0,0,0,0)');
+      btn.s2.setAttribute('stop-color', 'rgba(0,0,0,0)');
+      btn.s3.setAttribute('stop-color', 'rgba(0,0,0,0)');
+      btn.poly.setAttribute('fill', 'rgba(20,14,32,0.22)');
+      btn.poly.setAttribute('stroke', 'rgba(90,75,130,0.48)');
+      btn.poly.setAttribute('stroke-width', '0.85');
+    } else {
+      // ── Active / pulsing: full lit surface ──
+      const rr = lerp(BASE_R, R, intensity);
+      const gg = lerp(BASE_G, G, intensity);
+      const bb = lerp(BASE_B, B, intensity);
+      btn.el.style.setProperty('--r', rr);
+      btn.el.style.setProperty('--g', gg);
+      btn.el.style.setProperty('--b', bb);
+
+      const cr = Math.min(255, Math.round(rr * 1.35 + 12 * intensity));
+      const cg = Math.min(255, Math.round(gg * 1.35 +  8 * intensity));
+      const cb = Math.min(255, Math.round(bb * 1.30 +  5 * intensity));
+      btn.s1 && btn.s1.setAttribute('stop-color', `rgba(${cr},${cg},${cb},1)`);
+      btn.s2.setAttribute('stop-color', `rgba(${rr},${gg},${bb},1)`);
+      const dr = Math.round(rr * 0.38);
+      const dg = Math.round(gg * 0.38);
+      const db = Math.round(bb * 0.38);
+      btn.s3.setAttribute('stop-color', `rgba(${dr},${dg},${db},1)`);
+      btn.poly.setAttribute('fill', `url(#g${btn.col}_${btn.row})`);
+      btn.poly.setAttribute('stroke', 'rgba(0,0,0,0.75)');
+      btn.poly.setAttribute('stroke-width', '1.0');
+    }
+  }
+
+  function getNeighborKeys(col, row) {
+    const isOdd = col % 2 === 1;
+    const dirs = isOdd
+      ? [[-1,0],[1,0],[0,-1],[0,1],[-1,1],[1,1]]
+      : [[-1,0],[1,0],[0,-1],[0,1],[-1,-1],[1,-1]];
+    return dirs.map(([dc,dr]) => `${col+dc},${row+dr}`);
+  }
+
+  function pulseHex(nb, R, G, B, cls, duration, intensity) {
+    if (!nb) return;
+    if (!nb.active) setHexColor(nb, R, G, B, intensity);
+    nb.el.classList.remove('neighbor-pulse', 'neighbor-pulse-2');
+    void nb.el.offsetWidth;
+    nb.el.classList.add(cls);
+    setTimeout(() => {
+      nb.el.classList.remove(cls);
+      if (!nb.active) setHexColor(nb, 0, 0, 0, 0.0);
+    }, duration);
+  }
+
+  // For spoke-aligned rings: given center btn and a ring-1 neighbor,
+  // find the ring-1 neighbor's neighbor that continues outward in the same direction.
+  // "Same direction" = the neighbor of nb that is NOT center and NOT another ring-1 hex,
+  // AND is closest to the vector from center → nb extended outward.
+  function spokeNext(centerBtn, nb, excludeKeys) {
+    const dx = nb.cx - centerBtn.cx;
+    const dy = nb.cy - centerBtn.cy;
+    // Target position: one more step in same direction
+    const tx = nb.cx + dx;
+    const ty = nb.cy + dy;
+    // Find nb's neighbor closest to target, not in excludeKeys
+    const candidates = getNeighborKeys(nb.col, nb.row)
+      .filter(k => !excludeKeys.has(k) && hexMap[k]);
+    if (!candidates.length) return null;
+    // Pick closest to (tx, ty)
+    let best = null, bestDist = Infinity;
+    candidates.forEach(k => {
+      const b = hexMap[k];
+      const d = Math.hypot(b.cx - tx, b.cy - ty);
+      if (d < bestDist) { bestDist = d; best = k; }
+    });
+    return best;
+  }
+
+  function visualFlash(btn) {
+    const [R, G, B] = getColor(btn.key);
+    btn.el.classList.add('pressed');
+    setTimeout(() => btn.el.classList.remove('pressed'), 160);
+
+    const ring1Keys = getNeighborKeys(btn.col, btn.row);
+    const ring1Set  = new Set([btn.key, ...ring1Keys]);
+
+    // Ring 1 — 6 direct neighbors
+    setTimeout(() => {
+      ring1Keys.forEach(nk => pulseHex(hexMap[nk], R, G, B, 'neighbor-pulse', 620, 0.52));
+    }, 30);
+
+    // Ring 2 — full second ring
+    const ring2Keys = [];
+    ring1Keys.forEach(nk => {
+      const nb = hexMap[nk];
+      if (!nb) return;
+      getNeighborKeys(nb.col, nb.row).forEach(k => {
+        if (!ring1Set.has(k) && !ring2Keys.includes(k)) ring2Keys.push(k);
+      });
+    });
+
+    setTimeout(() => {
+      ring2Keys.forEach(nk => pulseHex(hexMap[nk], R, G, B, 'neighbor-pulse-2', 750, 0.32));
+    }, 90);
+
+  }
+
+  function trigger(btn) {
+    if (!btn.active) {
+      if (!btn.voice) btn.voice = randomVoice();
+      btn.active = true;
+      rerollHexColor(btn);                    // new color, maximally distant from neighbors
+      const [R, G, B] = getColor(btn.key);
+      setHexColor(btn, R, G, B);
+      btn.el.classList.add('active');
+      play808(btn.voice);
+      visualFlash(btn);
+      startLoop(btn.key, btn);
+    } else {
+      btn.active = false;
+      stopLoop(btn.key);
+      btn.el.classList.remove('active', 'pressed');
+      setHexColor(btn, 28, 22, 18);
+    }
+  }
+
+  function hitTest(x, y) {
+    const el = document.elementFromPoint(x, y);
+    if (!el) return null;
+    const hexDiv = el.closest('.hex');
+    if (!hexDiv) return null;
+    return btns.find(b => b.el === hexDiv) || null;
+  }
+
+  const touched = new Set();
+
+  function attachStageEvents() {
+    stage.addEventListener('pointerdown', e => {
+      e.preventDefault();
+      stage.setPointerCapture(e.pointerId);
+      const b = hitTest(e.clientX, e.clientY);
+      if (b && !touched.has(b.key)) {
+        touched.add(b.key);
+        if (!pitchCtrlHitTest(b) && !crawlerHitTest(b)) trigger(b);
+      }
+    }, { passive: false });
+
+    stage.addEventListener('pointermove', e => {
+      e.preventDefault();
+      const b = hitTest(e.clientX, e.clientY);
+      if (b && !touched.has(b.key)) {
+        touched.add(b.key);
+        if (!pitchCtrlHitTest(b) && !crawlerHitTest(b)) trigger(b);
+      }
+    }, { passive: false });
+
+    stage.addEventListener('pointerup',     () => touched.clear());
+    stage.addEventListener('pointercancel', () => touched.clear());
+
+    let resizeTimer;
+    window.addEventListener('resize', () => {
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => {
+        activeButtons.clear(); stopMasterClock();
+        clearPending(); pauseCrawler(); resetCrawler();
+        buildGrid();
+      }, 120);
+    });
+  }
+
+  // ══════════════════════════════════════════════════════════════════
+  //  CRAWLER — arpeggiated double-saw bass synth that roams the grid
+  // ══════════════════════════════════════════════════════════════════
+
+  const CRAWLER = {
+    active:   false,   // currently crawling
+    btn:      null,    // current hex btn
+    trail:    [],      // [{btn, age}] — age 0=just left, 1=older
+    timer:    null,    // movement interval
+    arpSeq:   [],      // current arp note sequence (Hz)
+    arpIdx:   0,       // position in sequence
+    arpTimer: null,    // arp note timer
+    homeBtn:  null,    // top-left anchor hex
+    pulseEl:  null,    // DOM overlay for idle pulse
+    nodes:    {},      // live audio nodes for cleanup
+    stuttering: false,  // debounce for kick-cross event
+    paused:     false,  // paused in place (not stopped/reset)
+    fullArpSeq: [],     // original full-length sequence for halving reference
+    nextArpSeq: null,   // queued pattern, switches at loop boundary
+  };
+
+  // ── Dual-saw oscillator with slight detune ──
+  function playSawNote(freq, dur, vol) {
+    const c = getCtx(), now = c.currentTime + AUDIO_AHEAD;
+    const master = c.createGain();
+    master.gain.setValueAtTime(vol * 0.7, now);
+    master.gain.setValueAtTime(vol * 0.7, now + dur * 0.7);
+    master.gain.linearRampToValueAtTime(0, now + dur);
+
+    [0, 7].forEach(detuneCents => {  // two saws, 7 cents apart
+      const osc = c.createOscillator();
+      osc.type = 'sawtooth';
+      osc.frequency.value = freq * Math.pow(2, detuneCents / 1200);
+      const lpf = c.createBiquadFilter();
+      lpf.type = 'lowpass';
+      lpf.frequency.setValueAtTime(800 + freq * 3, now);
+      lpf.frequency.linearRampToValueAtTime(300, now + dur * 0.8);
+      lpf.Q.value = 2.2;
+      osc.connect(lpf); lpf.connect(master);
+      osc.start(now); osc.stop(now + dur + 0.01);
+    });
+
+    master.connect(getArpDest());
+  }
+
+  // Chord splash: root + fifth + octave fired simultaneously (one-shot power chord)
+  function playChordSplash(freq) {
+    const ratios = [1.0, 1.5, 2.0]; // root, fifth, octave
+    ratios.forEach(r => playSawNote(freq * r, (SIXTEENTH_MS * 1.6) / 1000, 0.20));
+  }
+
+  // Stutter: repeat current note 3x as rapid 32nd triplets
+  function playStutter(freq) {
+    const gap = SIXTEENTH_MS / 3; // 32nd-note triplet spacing
+    const dur = (gap * 0.85) / 1000;
+    [0, 1, 2].forEach(i => {
+      setTimeout(() => {
+        if (CRAWLER.active) playSawNote(freq, dur, 0.22);
+      }, i * gap);
+    });
+  }
+
+  // Trigger the kick-crossing event: stutter + chord splash + pitch memory
+  function crawlerKickCross(kickBtn) {
+    if (CRAWLER.stuttering) return; // debounce
+    CRAWLER.stuttering = true;
+
+    const seq  = CRAWLER.arpSeq;
+    const freq = seq.length ? seq[CRAWLER.arpIdx % seq.length] : (rootPitch || 80);
+
+    // Visual: brief white flash on the kick hex
+    kickBtn.el.classList.add('pressed');
+    setTimeout(() => kickBtn.el.classList.remove('pressed'), 180);
+
+    // Stutter immediately
+    playStutter(freq);
+
+    // Chord splash after stutter
+    setTimeout(() => {
+      if (CRAWLER.active) playChordSplash(freq);
+      CRAWLER.stuttering = false;
+    }, SIXTEENTH_MS);
+
+  }
+
+  // Build a melodic arp sequence from rootPitch using harmonic intervals
+  function buildArpSeq() {
+    const root = rootPitch || 80;
+    // Pick 4–6 intervals, bias toward lower ratios for bass character
+    const bassIntervals = HARMONIC_INTERVALS.filter(iv => iv.ratio <= 2.0);
+    const len = Math.random() < 0.5 ? 8 : 16;
+    const seq = [];
+    const usedR = [];
+    for (let i = 0; i < len; i++) {
+      const pool = bassIntervals.filter(iv => !usedR.slice(-2).includes(iv.ratio));
+      const iv = pool[Math.floor(Math.random() * pool.length)];
+      usedR.push(iv.ratio);
+      let hz = root * iv.ratio;
+      // Keep in bass range 40–200 Hz
+      while (hz < 40)  hz *= 2;
+      while (hz > 200) hz *= 0.5;
+      seq.push(hz);
+    }
+    return seq;
+  }
+
+  // Visual: paint crawler hex white, trail hexes at fading intensity
+  function renderCrawler() {
+    // First pass: clear ALL trail hexes to empty (skip pending hex)
+    CRAWLER.trail.forEach(t => {
+      if (!t.btn.active && t.btn !== PENDING.btn) {
+        t.btn.el.style.filter = '';
+        setHexColor(t.btn, 0, 0, 0, 0.0);
+      }
+    });
+
+    // Second pass: repaint only the ones still in the trail (age 0 and 1)
+    CRAWLER.trail.forEach(t => {
+      if (!t.btn.active) {
+        const intensity = t.age === 0 ? 0.40 : t.age === 1 ? 0.18 : 0.07;
+        crawlerPaint(t.btn, 180, 160, 255, intensity);
+        t.btn.el.style.filter = '';
+      }
+    });
+
+    // Paint current hex bright white
+    if (CRAWLER.btn && !CRAWLER.btn.active) {
+      crawlerPaint(CRAWLER.btn, 255, 250, 255, 0.92);
+      CRAWLER.btn.el.style.filter =
+        'drop-shadow(0 0 14px rgba(200,180,255,0.9)) drop-shadow(0 0 30px rgba(160,120,255,0.5))';
+    }
+  }
+
+  function clearCrawlerVisual() {
+    if (CRAWLER.btn && !CRAWLER.btn.active) {
+      CRAWLER.btn.el.style.filter = '';
+      setHexColor(CRAWLER.btn, 0, 0, 0, 0.0);
+    }
+    CRAWLER.trail.forEach(t => {
+      if (!t.btn.active) {
+        t.btn.el.style.filter = '';
+        setHexColor(t.btn, 0, 0, 0, 0.0);
+      }
+    });
+    CRAWLER.trail = [];
+  }
+
+  // Move crawler one step to a random neighbor
+  function crawlerStep() {
+    if (!CRAWLER.active || !CRAWLER.btn) return;
+
+    // Clear aged-out hexes BEFORE trimming the array
+    CRAWLER.trail.forEach(t => t.age++);
+    const expired = CRAWLER.trail.filter(t => t.age > 1);
+    expired.forEach(t => {
+      if (!t.btn.active) {
+        t.btn.el.style.filter = '';
+        setHexColor(t.btn, 0, 0, 0, 0.0);
+      }
+    });
+    CRAWLER.trail = CRAWLER.trail.filter(t => t.age <= 2);
+    CRAWLER.trail.push({ btn: CRAWLER.btn, age: 0 });
+
+    // Check if any neighbors are active kick hexes — pick one to "cross"
+    const allNeighbors = getNeighborKeys(CRAWLER.btn.col, CRAWLER.btn.row)
+      .map(k => hexMap[k]).filter(Boolean);
+    const kickNeighbors = allNeighbors.filter(b => b.active);
+    const freeNeighbors = allNeighbors.filter(b => !b.active && b.key !== CRAWLER.homeBtn?.key);
+
+    // 30% chance to cross a kick hex if one is adjacent
+    if (kickNeighbors.length && freeNeighbors.length && Math.random() < 0.30) {
+      const crossedKick = kickNeighbors[Math.floor(Math.random() * kickNeighbors.length)];
+      crawlerKickCross(crossedKick);
+      // Still move to a free neighbor (don't land on the kick)
+    }
+
+    if (freeNeighbors.length) {
+      CRAWLER.btn = freeNeighbors[Math.floor(Math.random() * freeNeighbors.length)];
+    }
+
+    renderCrawler();
+  }
+
+  // Arp tick: play next note, switch to queued pattern at loop start
+  function crawlerArpTick() {
+    if (!CRAWLER.active) return;
+    const seq = CRAWLER.arpSeq;
+    if (!seq.length) return;
+    // At position 0, swap in queued pattern if one is waiting
+    if (CRAWLER.arpIdx === 0 && CRAWLER.nextArpSeq) {
+      CRAWLER.arpSeq = CRAWLER.nextArpSeq;
+      CRAWLER.fullArpSeq = CRAWLER.nextArpSeq.slice();
+      CRAWLER.nextArpSeq = null;
+    }
+    const freq = CRAWLER.arpSeq[CRAWLER.arpIdx % CRAWLER.arpSeq.length];
+    CRAWLER.arpIdx = (CRAWLER.arpIdx + 1) % CRAWLER.arpSeq.length;
+    const noteDur = (SIXTEENTH_MS * 1.9) / 1000;
+    playSawNote(freq, noteDur, 0.28);
+  }
+
+  // Start crawling from current btn
+  function startCrawler() {
+    CRAWLER.active = true;
+    CRAWLER.paused = false;
+    if (CRAWLER.homeBtn) CRAWLER.homeBtn.el.classList.remove('crawler-idle');
+    CRAWLER.arpSeq = buildArpSeq();
+    CRAWLER.fullArpSeq = CRAWLER.arpSeq.slice();
+    CRAWLER.arpIdx = 0;
+    // Move every 2 16th notes (eighth note = one step)
+    CRAWLER.timer    = setInterval(crawlerStep,    SIXTEENTH_MS * 2);
+    // Arp every 16th note (faster than movement, creates rolling feel)
+    CRAWLER.arpTimer = setInterval(crawlerArpTick, SIXTEENTH_MS);
+    crawlerArpTick(); // fire immediately
+    renderCrawler();
+  }
+
+  // Stop and reset to home
+  function pauseCrawler() {
+    CRAWLER.active = false;
+    CRAWLER.paused = true;
+    CRAWLER.stuttering = false;
+    clearInterval(CRAWLER.timer);
+    clearInterval(CRAWLER.arpTimer);
+    CRAWLER.timer = null; CRAWLER.arpTimer = null;
+    // Stay in place — just dim the head slightly to show paused state
+    if (CRAWLER.btn && !CRAWLER.btn.active) {
+      crawlerPaint(CRAWLER.btn, 180, 160, 255, 0.45);
+      CRAWLER.btn.el.style.filter = 'drop-shadow(0 0 6px rgba(160,130,255,0.4))';
+    }
+  }
+
+  function resumeCrawler() {
+    CRAWLER.active = true;
+    CRAWLER.paused = false;
+    CRAWLER.timer    = setInterval(crawlerStep,    SIXTEENTH_MS * 2);
+    CRAWLER.arpTimer = setInterval(crawlerArpTick, SIXTEENTH_MS);
+    crawlerArpTick();
+    renderCrawler();
+  }
+
+  function resetCrawler() {
+    clearPending();
+    hidePitchControls();
+    PITCH_CTRL.semitone = 0;
+    CRAWLER.active = false;
+    CRAWLER.paused = false;
+    CRAWLER.stuttering = false;
+    clearInterval(CRAWLER.timer);
+    clearInterval(CRAWLER.arpTimer);
+    CRAWLER.timer = null; CRAWLER.arpTimer = null;
+    clearCrawlerVisual();
+    CRAWLER.btn    = CRAWLER.homeBtn;
+    CRAWLER.arpSeq = [];
+    CRAWLER.arpIdx = 0;
+    CRAWLER.nextArpSeq = null;
+    renderIdlePulse();
+  }
+
+  // Idle: pulsing white on home hex
+  function renderIdlePulse() {
+    if (!CRAWLER.homeBtn || !CRAWLER.homeBtn.el) return;
+    if (!CRAWLER.homeBtn.active) {
+      crawlerPaint(CRAWLER.homeBtn, 200, 190, 255, 0.55);
+    }
+    CRAWLER.homeBtn.el.classList.add('crawler-idle');
+  }
+
+  // Paint a hex with crawler colors, bypassing the empty-cell guard
+  function crawlerPaint(btn, R, G, B, intensity) {
+    if (!btn) return;
+    btn.el.style.setProperty('--r', R);
+    btn.el.style.setProperty('--g', G);
+    btn.el.style.setProperty('--b', B);
+    btn.s1 && btn.s1.setAttribute('stop-color', `rgba(${Math.min(255,Math.round(R*1.3))},${Math.min(255,Math.round(G*1.3))},${Math.min(255,Math.round(B*1.3))},${intensity})`);
+    btn.s2.setAttribute('stop-color', `rgba(${R},${G},${B},${intensity})`);
+    btn.s3.setAttribute('stop-color', `rgba(${Math.round(R*0.4)},${Math.round(G*0.4)},${Math.round(B*0.4)},${intensity})`);
+    btn.poly.setAttribute('fill', `url(#g${btn.col}_${btn.row})`);
+    btn.poly.setAttribute('stroke', 'rgba(180,160,255,0.6)');
+    btn.poly.setAttribute('stroke-width', '1.0');
+  }
+
+  // Find top-left hex: min (cx + cy)
+  function findHomeHex() {
+    if (!btns.length) return null;
+    return btns.reduce((best, b) =>
+      (b.cx + b.cy < best.cx + best.cy) ? b : best
+    , btns[0]);
+  }
+
+  // PENDING crawler — pulsing at home, waiting to take over
+  const PENDING = { btn: null };
+
+  function spawnPending() {
+    if (PENDING.btn) return;
+    const home = CRAWLER.homeBtn;
+    if (!home || home.active) return;
+    // Only spawn if crawler has moved away from home
+    if (CRAWLER.btn && CRAWLER.btn.key === home.key) return;
+    PENDING.btn = home;
+    crawlerPaint(home, 255, 255, 255, 0.65);
+    home.el.classList.add('crawler-idle');
+  }
+
+  function clearPending() {
+    if (!PENDING.btn) return;
+    PENDING.btn.el.classList.remove('crawler-idle');
+    if (!PENDING.btn.active) setHexColor(PENDING.btn, 0, 0, 0, 0.0);
+    PENDING.btn = null;
+  }
+
+  function halveArp() {
+    const seq = CRAWLER.arpSeq;
+    if (!seq.length) return;
+    const newLen = Math.max(1, Math.floor(seq.length / 2));
+    // At minimum (1), restore full sequence
+    CRAWLER.arpSeq = seq.length === 1 ? CRAWLER.fullArpSeq.slice() : seq.slice(0, newLen);
+    CRAWLER.arpIdx = CRAWLER.arpIdx % CRAWLER.arpSeq.length;
+    checkPitchControls();
+  }
+
+  // Intercept taps on crawler or pending hex
+  function crawlerHitTest(b) {
+    // Tap on PENDING hex → kill old crawler, start fresh, spawn next pending after delay
+    if (PENDING.btn && b.key === PENDING.btn.key) {
+      clearPending();
+      resetCrawler();
+      startCrawler();
+      setTimeout(spawnPending, 3000);
+      return true;
+    }
+
+    if (!CRAWLER.btn) return false;
+    const isHead = b.key === CRAWLER.btn.key;
+    const isTail = CRAWLER.trail.some(t => t.btn.key === b.key);
+    if (!isHead && !isTail) return false;
+
+    if (!CRAWLER.active && !CRAWLER.paused) {
+      // Idle at home → start, spawn pending for next
+      startCrawler();
+      setTimeout(spawnPending, 3000);
+    } else {
+      // Active/paused → halve the loop
+      halveArp();
+    }
+    return true;
+  }
+
+  // Called after buildGrid to place crawler at home
+  function initCrawler() {
+    clearInterval(CRAWLER.timer);
+    clearInterval(CRAWLER.arpTimer);
+    CRAWLER.active = false;
+    CRAWLER.trail  = [];
+    CRAWLER.homeBtn = findHomeHex();
+    CRAWLER.btn     = CRAWLER.homeBtn;
+    if (CRAWLER.homeBtn) renderIdlePulse();
+  }
+
+  // ══════════════════════════════════════════════════════════════════
+  //  ARP PITCH CONTROLS — appear when loop reaches 2 notes
+  //  Two hexes in the lower-left: UP shifts root up one interval,
+  //  DOWN shifts root down one interval
+  // ══════════════════════════════════════════════════════════════════
+
+  const PITCH_CTRL = { up: null, dn: null, visible: false, semitone: 0 };
+
+  // Bass-range intervals for pitch stepping (in semitones from root)
+  const PITCH_STEPS = [0, 2, 3, 5, 7, 9, 10, 12, 14, 15, 17, 19, 21, 24];
+  // semitone → frequency ratio
+  function semiToRatio(semi) { return Math.pow(2, semi / 12); }
+
+  function findLowerLeftHexes() {
+    // Sort by (cx + (screenH - cy)) descending = bottom-left corner
+    const H = window.innerHeight;
+    const sorted = [...btns].sort((a, b) =>
+      ((H - b.cy) + b.cx * 0.3) - ((H - a.cy) + a.cx * 0.3)
+    );
+    // Skip any that are active kicks or the crawler/pending
+    const occupied = new Set([
+      CRAWLER.btn?.key, PENDING.btn?.key,
+      ...CRAWLER.trail.map(t => t.btn.key)
+    ]);
+    const free = sorted.filter(b => !b.active && !occupied.has(b.key));
+    return [free[0] || null, free[1] || null];
+  }
+
+  function paintPitchCtrl() {
+    if (PITCH_CTRL.up && !PITCH_CTRL.up.active) {
+      crawlerPaint(PITCH_CTRL.up, 80, 220, 160, 0.65); // green-teal = UP
+      PITCH_CTRL.up.el.classList.add('crawler-idle');
+    }
+    if (PITCH_CTRL.dn && !PITCH_CTRL.dn.active) {
+      crawlerPaint(PITCH_CTRL.dn, 220, 80, 160, 0.65); // magenta = DOWN
+      PITCH_CTRL.dn.el.classList.add('crawler-idle');
+    }
+  }
+
+  function clearPitchCtrl() {
+    [PITCH_CTRL.up, PITCH_CTRL.dn].forEach(b => {
+      if (!b) return;
+      b.el.classList.remove('crawler-idle');
+      b.el.style.filter = '';
+      if (!b.active) setHexColor(b, 0, 0, 0, 0.0);
+    });
+    PITCH_CTRL.up = null;
+    PITCH_CTRL.dn = null;
+    PITCH_CTRL.visible = false;
+  }
+
+  function showPitchControls() {
+    if (PITCH_CTRL.visible) return;
+    const [a, b] = findLowerLeftHexes();
+    if (!a || !b) return;
+    PITCH_CTRL.up = a;
+    PITCH_CTRL.dn = b;
+    PITCH_CTRL.visible = true;
+    paintPitchCtrl();
+  }
+
+  function hidePitchControls() {
+    clearPitchCtrl();
+  }
+
+  // Shift all notes in arp sequence by semitone delta
+  function shiftArpPitch(delta) {
+    PITCH_CTRL.semitone = Math.max(-24, Math.min(24, PITCH_CTRL.semitone + delta));
+    const ratio = semiToRatio(PITCH_CTRL.semitone);
+    // Rebuild from fullArpSeq with new transposition
+    const base = CRAWLER.fullArpSeq;
+    if (!base.length) return;
+    const shifted = base.map(hz => {
+      let f = hz * ratio;
+      while (f < 40)  f *= 2;
+      while (f > 400) f *= 0.5;
+      return f;
+    });
+    // Apply to current seq (preserve halved length)
+    const curLen = CRAWLER.arpSeq.length;
+    CRAWLER.arpSeq = shifted.slice(0, curLen);
+    // Flash the control
+    const btn = delta > 0 ? PITCH_CTRL.up : PITCH_CTRL.dn;
+    if (btn) {
+      btn.el.classList.add('pressed');
+      setTimeout(() => {
+        btn.el.classList.remove('pressed');
+        paintPitchCtrl();
+      }, 150);
+    }
+  }
+
+  // Check if pitch controls should appear/disappear based on loop length
+  function checkPitchControls() {
+    if (!CRAWLER.active && !CRAWLER.paused) { hidePitchControls(); return; }
+    if (CRAWLER.arpSeq.length <= 2) showPitchControls();
+    else hidePitchControls();
+  }
+
+  // Intercept pitch control taps — called before normal crawlerHitTest
+  function pitchCtrlHitTest(b) {
+    if (!PITCH_CTRL.visible) return false;
+    if (PITCH_CTRL.up && b.key === PITCH_CTRL.up.key) {
+      shiftArpPitch(2); // up a whole step
+      return true;
+    }
+    if (PITCH_CTRL.dn && b.key === PITCH_CTRL.dn.key) {
+      shiftArpPitch(-2); // down a whole step
+      return true;
+    }
+    return false;
+  }
+
+})();
+</script>
+</body>
+</html>
