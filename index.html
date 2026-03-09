@@ -1358,6 +1358,12 @@
   function processTick() {
     masterTick++;
 
+    // ── Drive crawler from master clock — perfect sync with drums ──
+    if (CRAWLER.active) {
+      crawlerArpTick();                        // every 16th note
+      if (masterTick % 2 === 0) crawlerStep(); // every 8th note
+    }
+
     // Collect all buttons that land on a hit this tick
     const hitsThisTick = [];
     activeButtons.forEach(key => {
@@ -1494,9 +1500,11 @@
   function stopLoop(key) {
     activeButtons.delete(key);
     if (activeButtons.size === 0) {
-      stopMasterClock();
-      // All drums cleared — if crawler is paused or idle, reset it fully
-      if (!CRAWLER.active) resetCrawler();
+      // Only stop clock if crawler is also inactive
+      if (!CRAWLER.active) {
+        stopMasterClock();
+        resetCrawler();
+      }
     }
     checkThumbstick();
   }
@@ -2462,11 +2470,8 @@
     CRAWLER.arpSeq = buildArpSeq();
     CRAWLER.fullArpSeq = CRAWLER.arpSeq.slice();
     CRAWLER.arpIdx = 0;
-    // Move every 2 16th notes (eighth note = one step)
-    CRAWLER.timer    = setInterval(crawlerStep,    SIXTEENTH_MS * 2);
-    // Arp every 16th note (faster than movement, creates rolling feel)
-    CRAWLER.arpTimer = setInterval(crawlerArpTick, SIXTEENTH_MS);
-    crawlerArpTick(); // fire immediately
+    // Crawler is driven by processTick — start master clock if no drums are active
+    if (activeButtons.size === 0) startMasterClock();
     renderCrawler();
   }
 
@@ -2475,9 +2480,6 @@
     CRAWLER.active = false;
     CRAWLER.paused = true;
     CRAWLER.stuttering = false;
-    clearInterval(CRAWLER.timer);
-    clearInterval(CRAWLER.arpTimer);
-    CRAWLER.timer = null; CRAWLER.arpTimer = null;
     // Stay in place — just dim the head slightly to show paused state
     if (CRAWLER.btn && !CRAWLER.btn.active) {
       crawlerPaint(CRAWLER.btn, 180, 160, 255, 0.45);
@@ -2488,9 +2490,7 @@
   function resumeCrawler() {
     CRAWLER.active = true;
     CRAWLER.paused = false;
-    CRAWLER.timer    = setInterval(crawlerStep,    SIXTEENTH_MS * 2);
-    CRAWLER.arpTimer = setInterval(crawlerArpTick, SIXTEENTH_MS);
-    crawlerArpTick();
+    if (activeButtons.size === 0) startMasterClock();
     renderCrawler();
   }
 
@@ -2501,14 +2501,12 @@
     CRAWLER.active = false;
     CRAWLER.paused = false;
     CRAWLER.stuttering = false;
-    clearInterval(CRAWLER.timer);
-    clearInterval(CRAWLER.arpTimer);
-    CRAWLER.timer = null; CRAWLER.arpTimer = null;
     clearCrawlerVisual();
     CRAWLER.btn    = CRAWLER.homeBtn;
     CRAWLER.arpSeq = [];
     CRAWLER.arpIdx = 0;
     CRAWLER.nextArpSeq = null;
+    if (activeButtons.size === 0) stopMasterClock();
     renderIdlePulse();
   }
 
