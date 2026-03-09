@@ -3344,13 +3344,11 @@
   function shiftArpPitch(delta) {
     const base = CRAWLER.fullArpSeq;
     if (!base.length) return;
-    // Cycle offset through available note indices
+    // Advance offset — never mutate fullArpSeq, always rotate from the original
     PITCH_CTRL.noteOffset = ((PITCH_CTRL.noteOffset + delta) % base.length + base.length) % base.length;
-    // Rotate the full sequence so it starts at the new offset
     const rotated = [...base.slice(PITCH_CTRL.noteOffset), ...base.slice(0, PITCH_CTRL.noteOffset)];
-    const curLen = CRAWLER.arpSeq.length;
-    CRAWLER.arpSeq = rotated.slice(0, curLen);
-    CRAWLER.fullArpSeq = rotated; // update full so further rotations compose correctly
+    CRAWLER.arpSeq = rotated.slice(0, CRAWLER.arpSeq.length);
+    // fullArpSeq stays unchanged so repeated presses always rotate from the same root
     const btn = delta > 0 ? PITCH_CTRL.up : PITCH_CTRL.dn;
     if (btn) {
       btn.el.classList.add('pressed');
@@ -3420,9 +3418,8 @@
     if (!base.length) return;
     LEAD_PITCH.noteOffset = ((LEAD_PITCH.noteOffset + delta) % base.length + base.length) % base.length;
     const rotated = [...base.slice(LEAD_PITCH.noteOffset), ...base.slice(0, LEAD_PITCH.noteOffset)];
-    const curLen = LEAD.arpSeq.length;
-    LEAD.arpSeq = rotated.slice(0, curLen);
-    LEAD.fullArpSeq = rotated;
+    LEAD.arpSeq = rotated.slice(0, LEAD.arpSeq.length);
+    // fullArpSeq stays unchanged so repeated presses always rotate from the same root
     const btn = delta > 0 ? LEAD_PITCH.up : LEAD_PITCH.dn;
     if (btn) {
       btn.el.classList.add('pressed');
