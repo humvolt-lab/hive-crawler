@@ -2441,6 +2441,22 @@
   };
 
   // ── Dual-saw oscillator with slight detune ──
+  // Fade out the bass arp bus over ~600ms then stop the crawler
+  function fadeOutBassArp(cb) {
+    if (!arpBus || !audioCtx) { if (cb) cb(); return; }
+    const gen = ++PENDING.fadeGen;
+    const now = audioCtx.currentTime;
+    const fadeDur = 1.4;
+    arpBus.gain.cancelScheduledValues(now);
+    arpBus.gain.setValueAtTime(Math.max(0.001, arpBus.gain.value), now);
+    arpBus.gain.exponentialRampToValueAtTime(0.001, now + fadeDur);
+    setTimeout(() => {
+      if (gen !== PENDING.fadeGen) return; // cancelled by a newer action
+      if (arpBus) { arpBus.gain.cancelScheduledValues(0); arpBus.gain.value = 0.80; }
+      if (cb) cb();
+    }, (fadeDur + 0.1) * 1000);
+  }
+
   function playSawNote(freq, dur, vol) {
     const c = getCtx(), now = c.currentTime + AUDIO_AHEAD;
     const master = c.createGain();
@@ -2652,9 +2668,10 @@
   }
 
   function resetCrawler() {
+    PENDING.stopped = false;
     clearPending();
     hidePitchControls();
-    PITCH_CTRL.semitone = 0;
+    PITCH_CTRL.noteOffset = 0;
     CRAWLER.active = false;
     CRAWLER.paused = false;
     CRAWLER.stuttering = false;
@@ -2759,16 +2776,17 @@
     LEAD_OSC.gain.gain.linearRampToValueAtTime(0.0, now + holdDur);
   }
 
-  function stopLeadOscs() {
+  function stopLeadOscs(fadeDur) {
     if (!LEAD_OSC.osc1) return;
     const c = getCtx(), now = c.currentTime;
+    const dur = fadeDur !== undefined ? fadeDur : 2.0;
     LEAD_OSC.gain.gain.cancelScheduledValues(now);
-    LEAD_OSC.gain.gain.setValueAtTime(LEAD_OSC.gain.gain.value, now);
-    LEAD_OSC.gain.gain.linearRampToValueAtTime(0, now + 0.06);
+    LEAD_OSC.gain.gain.setValueAtTime(Math.max(0.001, LEAD_OSC.gain.gain.value), now);
+    LEAD_OSC.gain.gain.exponentialRampToValueAtTime(0.001, now + dur);
     setTimeout(() => {
       try { LEAD_OSC.osc1.stop(); LEAD_OSC.osc2.stop(); } catch(e) {}
       LEAD_OSC.osc1 = null; LEAD_OSC.osc2 = null; LEAD_OSC.gain = null;
-    }, 100);
+    }, (dur + 0.1) * 1000);
   }
 
   // Build lead arp: harmonically above bass, 4–8 notes, mid-range (200–900 Hz)
@@ -2793,7 +2811,7 @@
   }
 
   // PENDING crawler — pulsing at home, waiting to take over
-  const PENDING = { btn: null };
+  const PENDING = { btn: null, stopped: false, fadeGen: 0 };
 
   function spawnPending() {
     if (PENDING.btn) return;
@@ -2825,12 +2843,29 @@
 
   // Intercept taps on crawler or pending hex
   function crawlerHitTest(b) {
-    // Tap on PENDING hex → kill old crawler, start fresh, spawn next pending after delay
     if (PENDING.btn && b.key === PENDING.btn.key) {
-      clearPending();
-      resetCrawler();
-      startCrawler();
-      setTimeout(spawnPending, 3000);
+      if (PENDING.stopped) {
+        // Stopped → spawn fresh arp; bump gen to cancel any in-flight fade callback
+        PENDING.stopped = false;
+        PENDING.fadeGen++;
+        if (arpBus) { arpBus.gain.cancelScheduledValues(0); arpBus.gain.value = 0.80; }
+        clearPending();
+        resetCrawler();
+        startCrawler();
+        setTimeout(spawnPending, 3000);
+      } else {
+        // Running → stop crawler immediately (no new notes), fade bus out
+        PENDING.stopped = true;
+        hidePitchControls();
+        pauseCrawler();
+        clearCrawlerVisual();
+        fadeOutBassArp(() => {
+          if (PENDING.btn) {
+            crawlerPaint(PENDING.btn, 200, 60, 60, 0.5);
+            PENDING.btn.el.classList.add('crawler-idle');
+          }
+        });
+      }
       return true;
     }
 
@@ -2880,7 +2915,7 @@
     arpTick:    0,   // counts processTick calls — fires note every 4 ticks (quarter-bar)
   };
 
-  const LEAD_PENDING = { btn: null };
+  const LEAD_PENDING = { btn: null, stopped: false, fadeGen: 0 };
 
   // Find top-right hex for lead home
   function findLeadHomeHex() {
@@ -3014,9 +3049,10 @@
   }
 
   function resetLeadCrawler() {
+    LEAD_PENDING.stopped = false;
     clearLeadPending();
     hideLeadPitchControls();
-    LEAD_PITCH.semitone = 0;
+    LEAD_PITCH.noteOffset = 0;
     LEAD.active = false;
     LEAD.paused = false;
     LEAD.tickCount = 0;
@@ -3049,10 +3085,30 @@
 
   function leadCrawlerHitTest(b) {
     if (LEAD_PENDING.btn && b.key === LEAD_PENDING.btn.key) {
-      clearLeadPending();
-      resetLeadCrawler();
-      startLeadCrawler();
-      setTimeout(spawnLeadPending, 3000);
+      if (LEAD_PENDING.stopped) {
+        // Stopped → spawn fresh lead; bump gen to cancel in-flight fade callback
+        LEAD_PENDING.stopped = false;
+        LEAD_PENDING.fadeGen++;
+        clearLeadPending();
+        resetLeadCrawler();
+        startLeadCrawler();
+        setTimeout(spawnLeadPending, 3000);
+      } else {
+        // Running → stop crawler immediately (no new notes), fade osc out
+        LEAD_PENDING.stopped = true;
+        hideLeadPitchControls();
+        const leadGen = ++LEAD_PENDING.fadeGen;
+        pauseLeadCrawler();
+        clearLeadCrawlerVisual();
+        stopLeadOscs(2.0);
+        setTimeout(() => {
+          if (leadGen !== LEAD_PENDING.fadeGen) return; // cancelled
+          if (LEAD_PENDING.btn) {
+            leadCrawlerPaint(LEAD_PENDING.btn, 180, 80, 20, 0.5);
+            LEAD_PENDING.btn.el.classList.add('crawler-idle');
+          }
+        }, 2100);
+      }
       return true;
     }
     if (!LEAD.btn) return false;
@@ -3090,7 +3146,7 @@
   //  DOWN shifts root down one interval
   // ══════════════════════════════════════════════════════════════════
 
-  const PITCH_CTRL = { up: null, dn: null, visible: false, semitone: 0 };
+  const PITCH_CTRL = { up: null, dn: null, visible: false, noteOffset: 0 };
 
   // Bass-range intervals for pitch stepping (in semitones from root)
   const PITCH_STEPS = [0, 2, 3, 5, 7, 9, 10, 12, 14, 15, 17, 19, 21, 24];
@@ -3180,30 +3236,21 @@
     clearPitchCtrl();
   }
 
-  // Shift all notes in arp sequence by semitone delta
+  // Step start note through the notes of the current full sequence
   function shiftArpPitch(delta) {
-    PITCH_CTRL.semitone = Math.max(-24, Math.min(24, PITCH_CTRL.semitone + delta));
-    const ratio = semiToRatio(PITCH_CTRL.semitone);
-    // Rebuild from fullArpSeq with new transposition
     const base = CRAWLER.fullArpSeq;
     if (!base.length) return;
-    const shifted = base.map(hz => {
-      let f = hz * ratio;
-      while (f < 40)  f *= 2;
-      while (f > 400) f *= 0.5;
-      return f;
-    });
-    // Apply to current seq (preserve halved length)
+    // Cycle offset through available note indices
+    PITCH_CTRL.noteOffset = ((PITCH_CTRL.noteOffset + delta) % base.length + base.length) % base.length;
+    // Rotate the full sequence so it starts at the new offset
+    const rotated = [...base.slice(PITCH_CTRL.noteOffset), ...base.slice(0, PITCH_CTRL.noteOffset)];
     const curLen = CRAWLER.arpSeq.length;
-    CRAWLER.arpSeq = shifted.slice(0, curLen);
-    // Flash the control
+    CRAWLER.arpSeq = rotated.slice(0, curLen);
+    CRAWLER.fullArpSeq = rotated; // update full so further rotations compose correctly
     const btn = delta > 0 ? PITCH_CTRL.up : PITCH_CTRL.dn;
     if (btn) {
       btn.el.classList.add('pressed');
-      setTimeout(() => {
-        btn.el.classList.remove('pressed');
-        paintPitchCtrl();
-      }, 150);
+      setTimeout(() => { btn.el.classList.remove('pressed'); paintPitchCtrl(); }, 150);
     }
   }
 
@@ -3218,11 +3265,11 @@
   function pitchCtrlHitTest(b) {
     if (!PITCH_CTRL.visible) return false;
     if (PITCH_CTRL.up && b.key === PITCH_CTRL.up.key) {
-      shiftArpPitch(2); // up a whole step
+      shiftArpPitch(1); // step up one note
       return true;
     }
     if (PITCH_CTRL.dn && b.key === PITCH_CTRL.dn.key) {
-      shiftArpPitch(-2); // down a whole step
+      shiftArpPitch(-1); // step down one note
       return true;
     }
     return false;
@@ -3230,7 +3277,7 @@
 
 
   // ── Lead pitch controls — bottom-right, same halve-to-2 trigger ──
-  const LEAD_PITCH = { up: null, dn: null, visible: false, semitone: 0 };
+  const LEAD_PITCH = { up: null, dn: null, visible: false, noteOffset: 0 };
 
   function paintLeadPitchCtrl() {
     if (LEAD_PITCH.up && !LEAD_PITCH.up.active) {
@@ -3265,18 +3312,13 @@
   function hideLeadPitchControls() { clearLeadPitchCtrl(); }
 
   function shiftLeadPitch(delta) {
-    LEAD_PITCH.semitone = Math.max(-24, Math.min(24, LEAD_PITCH.semitone + delta));
-    const ratio = Math.pow(2, LEAD_PITCH.semitone / 12);
     const base = LEAD.fullArpSeq;
     if (!base.length) return;
-    const shifted = base.map(hz => {
-      let f = hz * ratio;
-      while (f < 200) f *= 2;
-      while (f > 900) f *= 0.5;
-      return f;
-    });
+    LEAD_PITCH.noteOffset = ((LEAD_PITCH.noteOffset + delta) % base.length + base.length) % base.length;
+    const rotated = [...base.slice(LEAD_PITCH.noteOffset), ...base.slice(0, LEAD_PITCH.noteOffset)];
     const curLen = LEAD.arpSeq.length;
-    LEAD.arpSeq = shifted.slice(0, curLen);
+    LEAD.arpSeq = rotated.slice(0, curLen);
+    LEAD.fullArpSeq = rotated;
     const btn = delta > 0 ? LEAD_PITCH.up : LEAD_PITCH.dn;
     if (btn) {
       btn.el.classList.add('pressed');
@@ -3292,24 +3334,38 @@
 
   function leadPitchHitTest(b) {
     if (!LEAD_PITCH.visible) return false;
-    if (LEAD_PITCH.up && b.key === LEAD_PITCH.up.key) { shiftLeadPitch(2);  return true; }
-    if (LEAD_PITCH.dn && b.key === LEAD_PITCH.dn.key) { shiftLeadPitch(-2); return true; }
+    if (LEAD_PITCH.up && b.key === LEAD_PITCH.up.key) { shiftLeadPitch(1);  return true; }
+    if (LEAD_PITCH.dn && b.key === LEAD_PITCH.dn.key) { shiftLeadPitch(-1); return true; }
     return false;
   }
 
   // Prevent iOS double-tap zoom and pinch-to-zoom
+  // Block all gesture events
   document.addEventListener('gesturestart',  e => e.preventDefault(), { passive: false });
   document.addEventListener('gesturechange', e => e.preventDefault(), { passive: false });
   document.addEventListener('gestureend',    e => e.preventDefault(), { passive: false });
+
+  // Block multi-touch zoom
   document.addEventListener('touchmove', e => {
     if (e.touches.length > 1) e.preventDefault();
   }, { passive: false });
+
+  // Block double-tap zoom on both touchstart and touchend
   let lastTap = 0;
-  document.addEventListener('touchend', e => {
+  document.addEventListener('touchstart', e => {
     const now = Date.now();
-    if (now - lastTap < 300) e.preventDefault();
+    if (now - lastTap < 300) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
     lastTap = now;
   }, { passive: false });
+  document.addEventListener('touchend', e => {
+    e.preventDefault();
+  }, { passive: false });
+
+  // Belt-and-suspenders: block dblclick too
+  document.addEventListener('dblclick', e => e.preventDefault(), { passive: false });
 
 })();
 </script>
