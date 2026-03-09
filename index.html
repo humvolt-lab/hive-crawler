@@ -524,19 +524,49 @@
   // ══════════════════════════════════════════════════════
 
   // Joystick FX state (0–1 normalised)
-  const fx = { filter: 0.5, delay: 0.0, dist: 0.0 };
+  const fx = { drive: 0.0, delay: 0.0, dist: 0.0, stutter: 0.0, crush: 0.0, tape: 0.0 };
 
   // Bus nodes — populated by buildAudioChain()
-  let kickBus, percBus, arpBus;           // source buses
+  let kickBus, percBus, arpBus, leadBus;  // source buses
   let fxDistWet, fxDistDry, fxDistShaper; // distortion insert
-  let fxFilter;                            // filter insert
+  let fxFilter;
+  let fxDriveShaper, fxDriveWet, fxDriveDry; // soft drive insert
   let fxDelayNode, fxDelayWet, fxDelayFB; // delay send/return
-  let masterBus, limiter;                 // master + output
+  let fxCrushProc, fxCrushWet, fxCrushDry; // real bitcrusher (ScriptProcessor)
+  let fxTapeShaper, fxTapeWet, fxTapeDry; // tape saturation
+  let fxStutterGain;                       // stutter gate
+  let stutterLfoId = null;                 // RAF id for stutter
+  let masterBus, limiter;                  // master + output
 
   function rampParam(param, target, now, t = 0.06) {
     param.cancelScheduledValues(now);
     param.setValueAtTime(param.value, now);
     param.linearRampToValueAtTime(target, now + t);
+  }
+
+  function buildTapeCurve() {
+    // Warm even-harmonic saturation — soft knee, no hard clip
+    const n = 512;
+    const curve = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      const x = (i * 2) / n - 1;
+      // Hyperbolic tangent-style with gentle knee
+      curve[i] = Math.tanh(x * 2.2) * 0.85;
+    }
+    return curve;
+  }
+
+  function buildDriveCurve() {
+    // Soft tube-style overdrive — asymmetric, even harmonics, warm character
+    const n = 512;
+    const curve = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      const x = (i * 2) / n - 1;
+      // Asymmetric: positive half clips softer than negative (tube asymmetry)
+      if (x >= 0) curve[i] = 1 - Math.exp(-x * 3.5);
+      else        curve[i] = -(1 - Math.exp(x * 2.8)) * 0.9;
+    }
+    return curve;
   }
 
   function buildDistCurve() {
@@ -555,6 +585,7 @@
     kickBus = c.createGain(); kickBus.gain.value = 1.0;
     percBus = c.createGain(); percBus.gain.value = 0.85;
     arpBus  = c.createGain(); arpBus.gain.value  = 0.80;
+    leadBus = c.createGain(); leadBus.gain.value = 0.38;
 
     // ── Distortion insert (parallel dry/wet, fixed curve) ──
     fxDistShaper = c.createWaveShaper();
@@ -563,7 +594,14 @@
     fxDistWet = c.createGain(); fxDistWet.gain.value = 0.0;
     fxDistDry = c.createGain(); fxDistDry.gain.value = 1.0;
 
-    // ── Filter insert (post-distortion) ──
+    // ── Soft drive insert (pre-filter, parallel dry/wet) ──
+    fxDriveShaper = c.createWaveShaper();
+    fxDriveShaper.curve = buildDriveCurve();
+    fxDriveShaper.oversample = '2x';
+    fxDriveWet = c.createGain(); fxDriveWet.gain.value = 0.0;
+    fxDriveDry = c.createGain(); fxDriveDry.gain.value = 1.0;
+
+    // ── Filter insert (post-drive) ──
     fxFilter = c.createBiquadFilter();
     fxFilter.type = 'lowpass';
     fxFilter.frequency.value = 20000;
@@ -576,6 +614,37 @@
     fxDelayWet = c.createGain(); fxDelayWet.gain.value = 0.0;
     fxDelayNode.connect(fxDelayFB);
     fxDelayFB.connect(fxDelayNode);   // feedback loop
+
+    // ── Bitcrusher — real sample-rate + bit-depth reduction ──
+    fxCrushWet = c.createGain(); fxCrushWet.gain.value = 0.0;
+    fxCrushDry = c.createGain(); fxCrushDry.gain.value = 1.0;
+    // ScriptProcessor: quantise samples to simulate low bit depth + sample-rate reduction
+    fxCrushProc = c.createScriptProcessor(256, 1, 1);
+    fxCrushProc._bits = 24;   // current bit depth (24 = transparent, 4 = crushed)
+    fxCrushProc._step = 1;    // sample-hold counter
+    fxCrushProc._held = 0;    // held sample value
+    fxCrushProc._skip = 1;    // sample-rate divisor (1 = full rate, 8 = heavy crush)
+    fxCrushProc.onaudioprocess = function(e) {
+      const inp = e.inputBuffer.getChannelData(0);
+      const out = e.outputBuffer.getChannelData(0);
+      const bits = this._bits, skip = this._skip;
+      const levels = Math.pow(2, bits);
+      for (let i = 0; i < inp.length; i++) {
+        if (this._step >= skip) { this._held = Math.round(inp[i] * levels) / levels; this._step = 0; }
+        out[i] = this._held;
+        this._step++;
+      }
+    };
+
+    // ── Tape saturation (warm even-harmonic waveshaper, parallel) ──
+    fxTapeShaper = c.createWaveShaper();
+    fxTapeShaper.curve = buildTapeCurve();
+    fxTapeShaper.oversample = '2x';
+    fxTapeWet = c.createGain(); fxTapeWet.gain.value = 0.0;
+    fxTapeDry = c.createGain(); fxTapeDry.gain.value = 1.0;
+
+    // ── Stutter gate (GainNode modulated in applyFxState loop) ──
+    fxStutterGain = c.createGain(); fxStutterGain.gain.value = 1.0;
 
     // ── Master bus + output limiter ──
     masterBus = c.createGain(); masterBus.gain.value = 0.9;
@@ -594,13 +663,31 @@
     //                                              └─► fxDelayNode ─► fxDelayFB(loop)
     //                                                  fxDelayNode ─► fxDelayWet ─► masterBus
 
-    [kickBus, percBus, arpBus].forEach(bus => {
+    // buses → dist (parallel dry/wet) → tape (parallel dry/wet) → stutter → filter → master
+    [kickBus, percBus, arpBus, leadBus].forEach(bus => {
       bus.connect(fxDistShaper);
       bus.connect(fxDistDry);
     });
     fxDistShaper.connect(fxDistWet);
-    fxDistWet.connect(fxFilter);
-    fxDistDry.connect(fxFilter);
+    // dist output feeds tape
+    fxDistWet.connect(fxTapeShaper);
+    fxDistWet.connect(fxTapeDry);
+    fxDistDry.connect(fxTapeShaper);
+    fxDistDry.connect(fxTapeDry);
+    fxTapeShaper.connect(fxTapeWet);
+    // tape output feeds crusher (parallel dry/wet)
+    fxTapeWet.connect(fxCrushProc);
+    fxTapeWet.connect(fxCrushDry);
+    fxTapeDry.connect(fxCrushProc);
+    fxTapeDry.connect(fxCrushDry);
+    fxCrushProc.connect(fxCrushWet);
+    fxCrushWet.connect(fxStutterGain);
+    fxCrushDry.connect(fxStutterGain);
+    fxStutterGain.connect(fxDriveShaper);
+    fxStutterGain.connect(fxDriveDry);
+    fxDriveShaper.connect(fxDriveWet);
+    fxDriveWet.connect(fxFilter);
+    fxDriveDry.connect(fxFilter);
     fxFilter.connect(masterBus);
     fxFilter.connect(fxDelayNode);
     fxDelayNode.connect(fxDelayWet);
@@ -613,6 +700,7 @@
   function getKickDest() { return kickBus || audioCtx?.destination; }
   function getPercDest() { return percBus || audioCtx?.destination; }
   function getArpDest()  { return arpBus  || audioCtx?.destination; }
+  function getLeadDest() { return leadBus || audioCtx?.destination; }
   function getFxDestination() { return kickBus || audioCtx?.destination; } // legacy alias
 
   // Apply joystick FX — smooth ramps, no clicks
@@ -621,20 +709,83 @@
     const now = audioCtx.currentTime;
     const t   = 0.08;
 
-    // Filter: 0 = dark 120Hz, 0.5 = wide open, 1.0 = bright with resonance
-    const fval = fx.filter;
-    const freq = fval < 0.5
-      ? 120 + (18000 - 120) * Math.pow(fval / 0.5, 2)
-      : 18000 + (22000 - 18000) * ((fval - 0.5) / 0.5);
-    rampParam(fxFilter.frequency, Math.min(freq, 22000), now, t);
-    rampParam(fxFilter.Q, 0.7 + fval * 6, now, t);
+    // Master gain — baseline 0.9, pulled down by distortion amount
+    rampParam(masterBus.gain, 0.9 - fx.dist * 0.38, now, t);
 
-    // Delay wet level
-    rampParam(fxDelayWet.gain, fx.delay * 0.6, now, t);
+    // ── UP: Soft drive — 0 = bypass, 1 = warm tube overdrive ──
+    if (fxDriveWet) {
+      const dval = Math.max(0, fx.drive);
+      rampParam(fxDriveWet.gain, dval * 0.8, now, t);
+      rampParam(fxDriveDry.gain, Math.max(0.2, 1.0 - dval * 0.7), now, t);
+      // Compensate master gain for drive — less aggressive than hard dist
+      rampParam(masterBus.gain, (0.9 - fx.dist * 0.38) - dval * 0.18, now, t);
+    }
 
-    // Distortion: blend wet in, compensate dry — curve never changes
+    // ── UPPER-RIGHT: Delay ──
+    rampParam(fxDelayWet.gain, fx.delay * 0.65, now, t);
+
+    // ── LOWER-RIGHT: Distortion — compensate master for added harmonic energy ──
     rampParam(fxDistWet.gain, fx.dist * 0.85, now, t);
     rampParam(fxDistDry.gain, Math.max(0.15, 1.0 - fx.dist * 0.75), now, t);
+
+
+    // ── UPPER-LEFT: Tape saturation ──
+    rampParam(fxTapeWet.gain, fx.tape * 0.9, now, t);
+    rampParam(fxTapeDry.gain, Math.max(0.1, 1.0 - fx.tape * 0.8), now, t);
+
+    // ── LOWER-LEFT: Bitcrusher — bit depth + sample-rate reduction ──
+    if (fxCrushProc) {
+      const amt = fx.crush; // 0–1
+      // Bit depth: 24 (clean) → 4 (destroyed)
+      fxCrushProc._bits = Math.round(24 - amt * 20);
+      // Sample-rate divisor: 1 (full) → 8 (heavy)
+      fxCrushProc._skip = Math.max(1, Math.round(1 + amt * 7));
+      rampParam(fxCrushWet.gain, amt * 0.85, now, t);
+      rampParam(fxCrushDry.gain, Math.max(0.15, 1.0 - amt * 0.85), now, t);
+    }
+
+    // ── DOWN: Stutter gate ──
+    applyStutter(fx.stutter);
+  }
+
+  // Stutter gate — tempo-synced rhythmic chopping
+  let stutterPhase = 0;
+  function applyStutter(amount) {
+    if (!fxStutterGain || !audioCtx) return;
+    if (amount < 0.05) {
+      // Off — ramp to full gain smoothly
+      const tOff = audioCtx.currentTime;
+      fxStutterGain.gain.cancelScheduledValues(tOff);
+      fxStutterGain.gain.setValueAtTime(fxStutterGain.gain.value, tOff);
+      fxStutterGain.gain.linearRampToValueAtTime(1.0, tOff + 0.012);
+      if (stutterLfoId) { clearTimeout(stutterLfoId); stutterLfoId = null; }
+      return;
+    }
+    if (stutterLfoId) return; // already running
+    // Chop rate: at full push = 32nd notes, scales with amount
+    const chopTick = () => {
+      if (!audioCtx || fx.stutter < 0.05) {
+        fxStutterGain.gain.cancelScheduledValues(audioCtx.currentTime);
+        fxStutterGain.gain.setValueAtTime(1.0, audioCtx.currentTime);
+        stutterLfoId = null; return;
+      }
+      const now = audioCtx.currentTime;
+      const rate = fx.stutter; // 0–1
+      // Period: 32nd note at full, 8th note at min
+      const period = SIXTEENTH_MS / 1000 * (2 - rate * 1.5);
+      const duty    = 0.35 + rate * 0.25; // gate open ratio
+      const onTime  = period * duty;
+      const offTime = period * (1 - duty);
+      // Short fade at each edge to eliminate clicks — 4ms ramps
+      const fade = Math.min(0.004, onTime * 0.12, offTime * 0.12);
+      fxStutterGain.gain.cancelScheduledValues(now);
+      fxStutterGain.gain.setValueAtTime(1.0,  now);
+      fxStutterGain.gain.linearRampToValueAtTime(0.0,  now + onTime - fade);
+      fxStutterGain.gain.setValueAtTime(0.0,  now + onTime);
+      fxStutterGain.gain.linearRampToValueAtTime(1.0,  now + onTime + fade * 2);
+      stutterLfoId = setTimeout(chopTick, period * 1000 * 0.9);
+    };
+    chopTick();
   }
 
   function warmUpAudio(c) {
@@ -1021,7 +1172,7 @@
   // Lengths chosen to phase against each other:
   //   16 = 1 bar, 32 = 2 bars, 12 = 3/4, 10 = 5/8, 14 = 7/4 half,
   //   20 = 5/4, 24 = 3 bars of 4/4, 11 = prime (wildly phasing)
-  const PATTERN_LENGTHS_16 = [16, 16, 16, 32, 32, 12, 14, 20, 24, 10, 11];
+  const PATTERN_LENGTHS_16 = [16, 16, 16, 16, 16, 32, 32, 8, 8, 4];
 
   // Classic breakbeat rhythmic cells (in 16th steps within a 16-step bar)
   // These are real patterns from Amen break, Think break, Funky Drummer etc.
@@ -1358,10 +1509,15 @@
   function processTick() {
     masterTick++;
 
-    // ── Drive crawler from master clock — perfect sync with drums ──
+    // ── Drive crawlers from master clock — perfect sync with drums ──
     if (CRAWLER.active) {
       crawlerArpTick();                        // every 16th note
       if (masterTick % 2 === 0) crawlerStep(); // every 8th note
+    }
+    // Lead: note every 4 ticks (quarter-bar), step every 8 ticks (half-bar) — slow, legato
+    if (LEAD.active) {
+      if (masterTick % 4 === 0) leadArpTick(); // every quarter-bar
+      if (masterTick % 8 === 0) leadStep();    // every half-bar
     }
 
     // Collect all buttons that land on a hit this tick
@@ -1500,10 +1656,14 @@
   function stopLoop(key) {
     activeButtons.delete(key);
     if (activeButtons.size === 0) {
-      // Only stop clock if crawler is also inactive
-      if (!CRAWLER.active) {
+      if (!CRAWLER.active && !LEAD.active) {
         stopMasterClock();
         resetCrawler();
+        resetLeadCrawler();
+      } else if (!CRAWLER.active) {
+        resetCrawler();
+      } else if (!LEAD.active) {
+        resetLeadCrawler();
       }
     }
     checkThumbstick();
@@ -1517,7 +1677,7 @@
 
   const STICK_RADIUS = 52;  // outer gate radius (px)
   const KNOB_RADIUS  = 22;  // draggable knob radius
-  const MAX_TRAVEL   = STICK_RADIUS - KNOB_RADIUS - 4;
+  let MAX_TRAVEL     = STICK_RADIUS - KNOB_RADIUS - 4; // updated to hexR after buildGrid
 
   let stickVisible   = false;
   let stickDragging  = false;
@@ -1595,19 +1755,7 @@
         stroke: ax.color, 'stroke-width': '1.4', 'stroke-linecap': 'round'
       }));
 
-      // Label beyond arrowhead
-      const lr = arrowEnd + 13;
-      const txt = svgEl('text', {
-        x: lr * cos, y: lr * sin,
-        'text-anchor': 'middle',
-        'dominant-baseline': 'middle',
-        'font-family': 'Share Tech Mono, monospace',
-        'font-size': '7',
-        fill: ax.color,
-        'letter-spacing': '0.5'
-      });
-      txt.textContent = ax.label;
-      stickGate.appendChild(txt);
+      // Labels removed
     });
   })();
 
@@ -1662,11 +1810,7 @@
       'stroke-width': '0.8'
     }));
 
-    // Center ember dot
-    stickKnob.appendChild(svgEl('circle', {
-      cx:0, cy:0, r:3,
-      fill: 'rgba(140,255,80,0.9)'
-    }));
+    // Center dot removed
 
     stickPad.style.cssText = `position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);touch-action:none;cursor:grab;`;
     stickKnob.style.filter = 'drop-shadow(0 0 12px rgba(160,60,255,0.65)) drop-shadow(0 2px 4px rgba(0,0,0,0.9))';
@@ -1695,81 +1839,76 @@
   }
 
   function placeThumbstick() {
-    // coords saved during buildGrid before zone hexes were removed
     if (stickPickCx === null) return;
-    stickWrap.style.left      = stickPickCx + 'px';
-    stickWrap.style.top       = stickPickCy + 'px';
+    // Shift 1 hex diagonally up-left: colSpacing left, rowSpacing up
+    const sqrt3 = Math.sqrt(3);
+    const colSp = hexR * 1.5 + GAP;
+    const rowSp = hexR * sqrt3 + GAP;
+    stickWrap.style.left      = (stickPickCx - colSp) + 'px';
+    stickWrap.style.top       = (stickPickCy - rowSp * 0.5) + 'px';
     stickWrap.style.transform = 'translate(-50%, -50%)';
     stickWrap.classList.add('visible');
     stickVisible = true;
   }
 
   function drawStickWell(pick) {
-    // Remove any existing well
     const old = document.getElementById('stick-well');
     if (old) old.remove();
 
     const sqrt3 = Math.sqrt(3);
+    // Apply the same offset used by placeThumbstick so well matches widget position
+    const colSp = hexR * 1.5 + GAP;
+    const rowSp = hexR * sqrt3 + GAP;
+    const ox = -colSp;          // left one column
+    const oy = -rowSp * 0.5;    // up half a row
+
+    // Actual display centre
+    const wcx = pick.cx + ox;
+    const wcy = pick.cy + oy;
+
     const wellSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     wellSvg.id = 'stick-well';
     wellSvg.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;pointer-events:none;z-index:10;overflow:visible;';
 
     const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
-
-    // Radial gradient — dark inset with subtle inner glow at edge
     const gid = 'well-grad';
     const grad = document.createElementNS('http://www.w3.org/2000/svg', 'radialGradient');
     grad.id = gid;
-    grad.setAttribute('cx','50%'); grad.setAttribute('cy','50%'); grad.setAttribute('r','50%');
     grad.setAttribute('gradientUnits','userSpaceOnUse');
-    grad.setAttribute('cx', pick.cx); grad.setAttribute('cy', pick.cy);
+    grad.setAttribute('cx', wcx); grad.setAttribute('cy', wcy);
     grad.setAttribute('r', hexR * 2.8);
-    const gs1 = document.createElementNS('http://www.w3.org/2000/svg','stop');
-    gs1.setAttribute('offset','0%');   gs1.setAttribute('stop-color','rgba(4,2,1,0.96)');
-    const gs2 = document.createElementNS('http://www.w3.org/2000/svg','stop');
-    gs2.setAttribute('offset','75%');  gs2.setAttribute('stop-color','rgba(8,4,2,0.97)');
-    const gs3 = document.createElementNS('http://www.w3.org/2000/svg','stop');
-    gs3.setAttribute('offset','100%'); gs3.setAttribute('stop-color','rgba(30,15,6,0.92)');
-    grad.appendChild(gs1); grad.appendChild(gs2); grad.appendChild(gs3);
+    [[0,'rgba(4,2,1,0.96)'],[75,'rgba(8,4,2,0.97)'],[100,'rgba(30,15,6,0.92)']].forEach(([o,c]) => {
+      const s = document.createElementNS('http://www.w3.org/2000/svg','stop');
+      s.setAttribute('offset', o+'%'); s.setAttribute('stop-color', c);
+      grad.appendChild(s);
+    });
     defs.appendChild(grad);
     wellSvg.appendChild(defs);
 
-    // Draw each of the 7 zone hexes as a filled recessed polygon
-    const colSpacing = hexR * 1.5 + GAP;
-    const rowSpacing = hexR * sqrt3 + GAP;
-    const allZoneKeys = [pick.key, ...getNeighborKeys(pick.col, pick.row)];
+    // Helper: point string with offset applied
+    const pstr = (pts, cx, cy) => pts.map(([x,y]) => `${cx+ox+x},${cy+oy+y}`).join(' ');
 
+    const allZoneKeys = [pick.key, ...getNeighborKeys(pick.col, pick.row)];
     allZoneKeys.forEach(key => {
       const btn = hexMap[key];
       if (!btn) return;
-      // Hex polygon points in screen space
-      const pts = hexPoints(hexR - GAP / 2 + 1); // slightly larger to close gaps
+
       const poly = document.createElementNS('http://www.w3.org/2000/svg','polygon');
-      const ptsStr = pts.map(([x,y]) => `${btn.cx+x},${btn.cy+y}`).join(' ');
-      poly.setAttribute('points', ptsStr);
+      poly.setAttribute('points', pstr(hexPoints(hexR - GAP/2 + 1), btn.cx, btn.cy));
       poly.setAttribute('fill', `url(#${gid})`);
       poly.setAttribute('stroke', 'rgba(120,40,220,0.12)');
       poly.setAttribute('stroke-width', '0.8');
       wellSvg.appendChild(poly);
 
-      // Inner shadow ring — makes it look recessed/inlaid
       const inner = document.createElementNS('http://www.w3.org/2000/svg','polygon');
-      const innerPts = hexPoints(hexR - GAP / 2 - 2);
-      inner.setAttribute('points', innerPts.map(([x,y]) => `${btn.cx+x},${btn.cy+y}`).join(' '));
+      inner.setAttribute('points', pstr(hexPoints(hexR - GAP/2 - 2), btn.cx, btn.cy));
       inner.setAttribute('fill', 'none');
       inner.setAttribute('stroke', 'rgba(0,0,0,0.5)');
       inner.setAttribute('stroke-width', '2');
       wellSvg.appendChild(inner);
-    });
 
-    // Outer border ring around the whole cluster
-    // Draw as a slightly enlarged version of all 7 hexes merged visually via stroke
-    allZoneKeys.forEach(key => {
-      const btn = hexMap[key];
-      if (!btn) return;
-      const pts = hexPoints(hexR + GAP / 2);
       const border = document.createElementNS('http://www.w3.org/2000/svg','polygon');
-      border.setAttribute('points', pts.map(([x,y]) => `${btn.cx+x},${btn.cy+y}`).join(' '));
+      border.setAttribute('points', pstr(hexPoints(hexR + GAP/2), btn.cx, btn.cy));
       border.setAttribute('fill', 'none');
       border.setAttribute('stroke', 'rgba(140,40,255,0.16)');
       border.setAttribute('stroke-width', '1');
@@ -1784,7 +1923,7 @@
     stickWrap.style.display = 'none';
     stickVisible = false;
     // Reset FX to neutral
-    fx.filter = 0.5; fx.delay = 0; fx.dist = 0;
+    fx.drive = 0; fx.delay = 0; fx.dist = 0; fx.stutter = 0; fx.crush = 0; fx.tape = 0;
     applyFxState();
     updateFxDots();
   }
@@ -1800,18 +1939,29 @@
     // Axis 1: upper-right (-30°) / lower-left     → delay up/down
     // Axis 2: lower-right (+30°) / upper-left     → distortion up/down
 
-    const axes = [
-      { angle: -Math.PI/2 },   // up   = filter bright
-      { angle: -Math.PI/6 },   // upper-right = delay up
-      { angle:  Math.PI/6 },   // lower-right = distortion up
+    // 6 independent directions — each maps to a unique effect
+    const dirs = [
+      { angle: -Math.PI/2,      key: 'drive'   },  // up          → soft drive
+      { angle: -Math.PI/6,      key: 'delay'   },  // upper-right → delay
+      { angle:  Math.PI/6,      key: 'dist'    },  // lower-right → distortion
+      { angle:  Math.PI/2,      key: 'stutter' },  // down        → stutter gate
+      { angle:  Math.PI*(5/6),  key: 'crush'   },  // lower-left  → bitcrusher
+      { angle: -Math.PI*(5/6),  key: 'tape'    },  // upper-left  → tape saturation
     ];
 
-    axes.forEach((ax, i) => {
-      const projection = Math.cos(angle - ax.angle) * norm;
-      if      (i === 0) fx.filter = 0.5 + projection * 0.5;  // 0–1
-      else if (i === 1) fx.delay  = Math.max(0, projection);  // 0–1
-      else if (i === 2) fx.dist   = Math.max(0, projection);  // 0–1
+    // Reset all to off
+    dirs.forEach(d => { fx[d.key] = 0; });
+
+    // Find dominant direction and set its value
+    let best = null, bestProj = 0.05;
+    dirs.forEach(d => {
+      const proj = Math.cos(angle - d.angle) * norm;
+      if (proj > bestProj) { bestProj = proj; best = d; }
     });
+    if (best) fx[best.key] = bestProj;
+
+    // Filter: 1.0 at rest (open), scales up with up-push
+    fx.drive = Math.max(0, Math.cos(angle - (-Math.PI/2)) * norm);
 
     applyFxState();
     updateFxDots();
@@ -1826,7 +1976,7 @@
   }
 
   function updateFxDots() {
-    document.getElementById('dot-filter').classList.toggle('active', Math.abs(fx.filter - 0.5) > 0.15);
+    document.getElementById('dot-filter').classList.toggle('active', fx.drive > 0.1);
     document.getElementById('dot-delay').classList.toggle('active',  fx.delay > 0.1);
     document.getElementById('dot-dist').classList.toggle('active',   fx.dist  > 0.1);
   }
@@ -1839,7 +1989,8 @@
       stickX *= 0.78; stickY *= 0.78;
       if (Math.abs(stickX) < 0.5 && Math.abs(stickY) < 0.5) {
         stickX = 0; stickY = 0;
-        fx.filter = 0.5; fx.delay = 0; fx.dist = 0;
+        fx.drive = 0; fx.delay = 0; fx.dist = 0; fx.stutter = 0; fx.crush = 0; fx.tape = 0;
+        applyFxState();
       }
       updateStickFx();
       if (stickX !== 0 || stickY !== 0) requestAnimationFrame(spring);
@@ -1882,6 +2033,7 @@
   const GAP = 4;
   let btns = [];
   let COLS, ROWS, hexR;
+  let gridW = 0, gridH = 0, gridSafeTop = 0; // saved after buildGrid
   const hexMap = {};
 
   function hexPoints(r) {
@@ -1919,6 +2071,8 @@
     safeTop = Math.max(safeTop, 12) + 12;
     const W = window.innerWidth;
     const H = window.innerHeight - safeTop - safeBottom;
+    // Save for use by pitch controls and other post-build functions
+    gridW = W; gridH = H; gridSafeTop = safeTop;
     const sqrt3 = Math.sqrt(3);
 
     let bestScore = 0;
@@ -2082,8 +2236,11 @@
       });
     }
 
-    // Init crawler at top-left hex after grid is ready
-    setTimeout(initCrawler, 50);
+    // Update joystick travel to 1.5 hex radii — reaches edge of adjacent hex
+    MAX_TRAVEL = Math.round(hexR * 1.5);
+
+    // Init both crawlers after grid is ready
+    setTimeout(() => { initCrawler(); initLeadCrawler(); }, 50);
   }
 
   const BASE_R = 18, BASE_G = 16, BASE_B = 24;
@@ -2235,7 +2392,7 @@
       const b = hitTest(e.clientX, e.clientY);
       if (b && !touched.has(b.key)) {
         touched.add(b.key);
-        if (!pitchCtrlHitTest(b) && !crawlerHitTest(b)) trigger(b);
+        if (!pitchCtrlHitTest(b) && !leadPitchHitTest(b) && !leadCrawlerHitTest(b) && !crawlerHitTest(b)) trigger(b);
       }
     }, { passive: false });
 
@@ -2244,7 +2401,7 @@
       const b = hitTest(e.clientX, e.clientY);
       if (b && !touched.has(b.key)) {
         touched.add(b.key);
-        if (!pitchCtrlHitTest(b) && !crawlerHitTest(b)) trigger(b);
+        if (!pitchCtrlHitTest(b) && !leadPitchHitTest(b) && !leadCrawlerHitTest(b) && !crawlerHitTest(b)) trigger(b);
       }
     }, { passive: false });
 
@@ -2541,6 +2698,100 @@
     , btns[0]);
   }
 
+
+  // ── Lead synth — portamento dual-saw, persists between notes ──
+  const LEAD_OSC = { osc1: null, osc2: null, gain: null, freq: 220 };
+
+  function ensureLeadOscs() {
+    if (LEAD_OSC.osc1) return;
+    const c = getCtx();
+    const now = c.currentTime;
+    LEAD_OSC.gain = c.createGain();
+    LEAD_OSC.gain.gain.setValueAtTime(0, now);
+
+    // Slightly brighter filter for lead vs bass
+    const lpf1 = c.createBiquadFilter();
+    lpf1.type = 'lowpass'; lpf1.frequency.value = 3200; lpf1.Q.value = 1.8;
+    const lpf2 = c.createBiquadFilter();
+    lpf2.type = 'lowpass'; lpf2.frequency.value = 3200; lpf2.Q.value = 1.8;
+
+    LEAD_OSC.osc1 = c.createOscillator(); LEAD_OSC.osc1.type = 'sawtooth';
+    LEAD_OSC.osc2 = c.createOscillator(); LEAD_OSC.osc2.type = 'sawtooth';
+    LEAD_OSC.osc1.frequency.value = LEAD_OSC.freq;
+    LEAD_OSC.osc2.frequency.value = LEAD_OSC.freq * Math.pow(2, 9/1200); // 9 cents detune
+
+    LEAD_OSC.osc1.connect(lpf1); lpf1.connect(LEAD_OSC.gain);
+    LEAD_OSC.osc2.connect(lpf2); lpf2.connect(LEAD_OSC.gain);
+    LEAD_OSC.gain.connect(getLeadDest());
+    LEAD_OSC.osc1.start(); LEAD_OSC.osc2.start();
+    LEAD_OSC.lpf1 = lpf1; LEAD_OSC.lpf2 = lpf2;
+  }
+
+  function playLeadNote(freq) {
+    ensureLeadOscs();
+    const c = getCtx(), now = c.currentTime + AUDIO_AHEAD;
+    // Portamento: glide over 2 sixteenth notes
+    const glide = (SIXTEENTH_MS * 2) / 1000;
+    LEAD_OSC.osc1.frequency.cancelScheduledValues(now);
+    LEAD_OSC.osc2.frequency.cancelScheduledValues(now);
+    LEAD_OSC.osc1.frequency.setValueAtTime(LEAD_OSC.osc1.frequency.value, now);
+    LEAD_OSC.osc2.frequency.setValueAtTime(LEAD_OSC.osc2.frequency.value, now);
+    LEAD_OSC.osc1.frequency.exponentialRampToValueAtTime(freq, now + glide);
+    LEAD_OSC.osc2.frequency.exponentialRampToValueAtTime(freq * Math.pow(2, 9/1200), now + glide);
+    LEAD_OSC.freq = freq;
+
+    // Filter sweep follows pitch — lead stays brighter
+    const fTarget = Math.min(12000, 1200 + freq * 5);
+    LEAD_OSC.lpf1.frequency.cancelScheduledValues(now);
+    LEAD_OSC.lpf1.frequency.setValueAtTime(LEAD_OSC.lpf1.frequency.value, now);
+    LEAD_OSC.lpf1.frequency.linearRampToValueAtTime(fTarget, now + glide);
+    LEAD_OSC.lpf2.frequency.cancelScheduledValues(now);
+    LEAD_OSC.lpf2.frequency.setValueAtTime(LEAD_OSC.lpf2.frequency.value, now);
+    LEAD_OSC.lpf2.frequency.linearRampToValueAtTime(fTarget, now + glide);
+
+    // Gate: fade in now, hold, fade out before next note
+    const holdDur = (SIXTEENTH_MS * 7.5) / 1000; // hold for ~2 bars worth
+    LEAD_OSC.gain.gain.cancelScheduledValues(now);
+    LEAD_OSC.gain.gain.setValueAtTime(LEAD_OSC.gain.gain.value, now);
+    const leadVol = LEAD.arpSeq.length <= 1 ? 0.12 : 0.22;
+    LEAD_OSC.gain.gain.linearRampToValueAtTime(leadVol, now + 0.015);
+    LEAD_OSC.gain.gain.setValueAtTime(leadVol, now + holdDur - 0.02);
+    LEAD_OSC.gain.gain.linearRampToValueAtTime(0.0, now + holdDur);
+  }
+
+  function stopLeadOscs() {
+    if (!LEAD_OSC.osc1) return;
+    const c = getCtx(), now = c.currentTime;
+    LEAD_OSC.gain.gain.cancelScheduledValues(now);
+    LEAD_OSC.gain.gain.setValueAtTime(LEAD_OSC.gain.gain.value, now);
+    LEAD_OSC.gain.gain.linearRampToValueAtTime(0, now + 0.06);
+    setTimeout(() => {
+      try { LEAD_OSC.osc1.stop(); LEAD_OSC.osc2.stop(); } catch(e) {}
+      LEAD_OSC.osc1 = null; LEAD_OSC.osc2 = null; LEAD_OSC.gain = null;
+    }, 100);
+  }
+
+  // Build lead arp: harmonically above bass, 4–8 notes, mid-range (200–900 Hz)
+  function buildLeadSeq() {
+    const root = rootPitch || 80;
+    // Lead intervals: thirds, fifths, octaves, and compound intervals — above bass
+    const leadIntervals = HARMONIC_INTERVALS.filter(iv => iv.ratio >= 1.25 && iv.ratio <= 4.0);
+    const len = 4; // short loop — changes notes slowly (each note = 4 ticks)
+    const seq = [];
+    const usedR = [];
+    for (let i = 0; i < len; i++) {
+      const pool = leadIntervals.filter(iv => !usedR.slice(-2).includes(iv.ratio));
+      const iv = pool[Math.floor(Math.random() * pool.length)];
+      usedR.push(iv.ratio);
+      let hz = root * iv.ratio;
+      // Keep in mid/lead range 200–900 Hz
+      while (hz < 200) hz *= 2;
+      while (hz > 900) hz *= 0.5;
+      seq.push(hz);
+    }
+    return seq;
+  }
+
   // PENDING crawler — pulsing at home, waiting to take over
   const PENDING = { btn: null };
 
@@ -2610,6 +2861,229 @@
     if (CRAWLER.homeBtn) renderIdlePulse();
   }
 
+
+  // ══════════════════════════════════════════════════════════════════
+  //  LEAD CRAWLER — right-side, portamento lead synth, slow step rate
+  //  Warm amber/gold palette vs bass violet/white
+  // ══════════════════════════════════════════════════════════════════
+
+  const LEAD = {
+    active:   false,
+    paused:   false,
+    btn:      null,
+    trail:    [],
+    arpSeq:   [],
+    arpIdx:   0,
+    homeBtn:  null,
+    fullArpSeq: [],
+    tickCount:  0,   // counts processTick calls — steps every 8 ticks (half-bar)
+    arpTick:    0,   // counts processTick calls — fires note every 4 ticks (quarter-bar)
+  };
+
+  const LEAD_PENDING = { btn: null };
+
+  // Find top-right hex for lead home
+  function findLeadHomeHex() {
+    if (!btns.length) return null;
+    return btns.reduce((best, b) =>
+      ((b.cx - b.cy) > (best.cx - best.cy)) ? b : best
+    , btns[0]);
+  }
+
+  function leadCrawlerPaint(btn, R, G, B, intensity) {
+    if (!btn) return;
+    btn.el.style.setProperty('--r', R);
+    btn.el.style.setProperty('--g', G);
+    btn.el.style.setProperty('--b', B);
+    btn.s1 && btn.s1.setAttribute('stop-color',
+      `rgba(${Math.min(255,Math.round(R*1.3))},${Math.min(255,Math.round(G*1.3))},${Math.min(255,Math.round(B*1.3))},${intensity})`);
+    btn.s2.setAttribute('stop-color', `rgba(${R},${G},${B},${intensity})`);
+    btn.s3.setAttribute('stop-color', `rgba(${Math.round(R*0.4)},${Math.round(G*0.4)},${Math.round(B*0.4)},${intensity})`);
+    btn.poly.setAttribute('fill', `url(#g${btn.col}_${btn.row})`);
+    btn.poly.setAttribute('stroke', 'rgba(255,200,80,0.6)');
+    btn.poly.setAttribute('stroke-width', '1.0');
+  }
+
+  function renderLeadCrawler() {
+    LEAD.trail.forEach(t => {
+      if (!t.btn.active && t.btn !== LEAD_PENDING.btn && t.btn !== LEAD.homeBtn) {
+        t.btn.el.style.filter = '';
+        setHexColor(t.btn, 0, 0, 0, 0.0);
+      }
+    });
+    LEAD.trail.forEach(t => {
+      if (!t.btn.active) {
+        const intensity = t.age === 0 ? 0.38 : t.age === 1 ? 0.16 : 0.06;
+        leadCrawlerPaint(t.btn, 255, 180, 40, intensity); // amber trail
+        t.btn.el.style.filter = '';
+      }
+    });
+    if (LEAD.btn && !LEAD.btn.active) {
+      leadCrawlerPaint(LEAD.btn, 255, 240, 160, 0.95); // warm gold head
+      LEAD.btn.el.style.filter =
+        'drop-shadow(0 0 14px rgba(255,210,80,0.9)) drop-shadow(0 0 30px rgba(255,160,40,0.5))';
+    }
+  }
+
+  function clearLeadCrawlerVisual() {
+    if (LEAD.btn && !LEAD.btn.active && LEAD.btn !== LEAD_PENDING.btn) {
+      LEAD.btn.el.style.filter = '';
+      setHexColor(LEAD.btn, 0, 0, 0, 0.0);
+    }
+    LEAD.trail.forEach(t => {
+      if (!t.btn.active && t.btn !== LEAD_PENDING.btn) {
+        t.btn.el.style.filter = '';
+        setHexColor(t.btn, 0, 0, 0, 0.0);
+      }
+    });
+    LEAD.trail = [];
+  }
+
+  function renderLeadIdlePulse() {
+    if (!LEAD.homeBtn || !LEAD.homeBtn.el) return;
+    if (!LEAD.homeBtn.active) leadCrawlerPaint(LEAD.homeBtn, 255, 200, 80, 0.55);
+    LEAD.homeBtn.el.classList.add('crawler-idle');
+  }
+
+  function leadStep() {
+    if (!LEAD.active || !LEAD.btn) return;
+    LEAD.trail.forEach(t => t.age++);
+    const expired = LEAD.trail.filter(t => t.age > 1);
+    expired.forEach(t => {
+      if (!t.btn.active) { t.btn.el.style.filter = ''; setHexColor(t.btn, 0, 0, 0, 0.0); }
+    });
+    LEAD.trail = LEAD.trail.filter(t => t.age <= 2);
+    LEAD.trail.push({ btn: LEAD.btn, age: 0 });
+
+    const allNeighbors = getNeighborKeys(LEAD.btn.col, LEAD.btn.row)
+      .map(k => hexMap[k]).filter(Boolean);
+    const freeNeighbors = allNeighbors.filter(b =>
+      !b.active &&
+      b.key !== LEAD.homeBtn?.key &&
+      b.key !== CRAWLER.btn?.key &&
+      !CRAWLER.trail.some(t => t.btn.key === b.key)
+    );
+    if (freeNeighbors.length) {
+      LEAD.btn = freeNeighbors[Math.floor(Math.random() * freeNeighbors.length)];
+    }
+    renderLeadCrawler();
+    // Repaint pending home if it exists — movement must not overwrite it
+    if (LEAD_PENDING.btn && !LEAD_PENDING.btn.active) {
+      leadCrawlerPaint(LEAD_PENDING.btn, 255, 240, 160, 0.65);
+      LEAD_PENDING.btn.el.classList.add('crawler-idle');
+    }
+  }
+
+  function leadArpTick() {
+    if (!LEAD.active) return;
+    const seq = LEAD.arpSeq;
+    if (!seq.length) return;
+    const freq = seq[LEAD.arpIdx % seq.length];
+    LEAD.arpIdx = (LEAD.arpIdx + 1) % seq.length;
+    playLeadNote(freq);
+  }
+
+  function startLeadCrawler() {
+    LEAD.active = true;
+    LEAD.paused = false;
+    LEAD.tickCount = 0;
+    LEAD.arpTick   = 0;
+    if (LEAD.homeBtn) LEAD.homeBtn.el.classList.remove('crawler-idle');
+    LEAD.arpSeq = buildLeadSeq();
+    LEAD.fullArpSeq = LEAD.arpSeq.slice();
+    LEAD.arpIdx = 0;
+    if (activeButtons.size === 0 && !CRAWLER.active) startMasterClock();
+    renderLeadCrawler();
+  }
+
+  function pauseLeadCrawler() {
+    LEAD.active = false;
+    LEAD.paused = true;
+    stopLeadOscs();
+    if (LEAD.btn && !LEAD.btn.active) {
+      leadCrawlerPaint(LEAD.btn, 200, 140, 40, 0.45);
+      LEAD.btn.el.style.filter = 'drop-shadow(0 0 6px rgba(255,180,60,0.4))';
+    }
+  }
+
+  function resumeLeadCrawler() {
+    LEAD.active = true;
+    LEAD.paused = false;
+    if (activeButtons.size === 0 && !CRAWLER.active) startMasterClock();
+    renderLeadCrawler();
+  }
+
+  function resetLeadCrawler() {
+    clearLeadPending();
+    hideLeadPitchControls();
+    LEAD_PITCH.semitone = 0;
+    LEAD.active = false;
+    LEAD.paused = false;
+    LEAD.tickCount = 0;
+    LEAD.arpTick   = 0;
+    stopLeadOscs();
+    clearLeadCrawlerVisual();
+    LEAD.btn    = LEAD.homeBtn;
+    LEAD.arpSeq = [];
+    LEAD.arpIdx = 0;
+    if (activeButtons.size === 0 && !CRAWLER.active) stopMasterClock();
+    renderLeadIdlePulse();
+  }
+
+  function spawnLeadPending() {
+    if (LEAD_PENDING.btn) return;
+    const home = LEAD.homeBtn;
+    if (!home || home.active) return;
+    if (LEAD.btn && LEAD.btn.key === home.key) return;
+    LEAD_PENDING.btn = home;
+    leadCrawlerPaint(home, 255, 240, 160, 0.65);
+    home.el.classList.add('crawler-idle');
+  }
+
+  function clearLeadPending() {
+    if (!LEAD_PENDING.btn) return;
+    LEAD_PENDING.btn.el.classList.remove('crawler-idle');
+    if (!LEAD_PENDING.btn.active) setHexColor(LEAD_PENDING.btn, 0, 0, 0, 0.0);
+    LEAD_PENDING.btn = null;
+  }
+
+  function leadCrawlerHitTest(b) {
+    if (LEAD_PENDING.btn && b.key === LEAD_PENDING.btn.key) {
+      clearLeadPending();
+      resetLeadCrawler();
+      startLeadCrawler();
+      setTimeout(spawnLeadPending, 3000);
+      return true;
+    }
+    if (!LEAD.btn) return false;
+    const isHead = b.key === LEAD.btn.key;
+    const isTail = LEAD.trail.some(t => t.btn.key === b.key);
+    if (!isHead && !isTail) return false;
+
+    if (!LEAD.active && !LEAD.paused) {
+      startLeadCrawler();
+      setTimeout(spawnLeadPending, 3000);
+    } else {
+      // Halve lead arp loop
+      const seq = LEAD.arpSeq;
+      if (seq.length) {
+        const newLen = Math.max(1, Math.floor(seq.length / 2));
+        LEAD.arpSeq = seq.length === 1 ? LEAD.fullArpSeq.slice() : seq.slice(0, newLen);
+        LEAD.arpIdx = LEAD.arpIdx % LEAD.arpSeq.length;
+      }
+      checkLeadPitchControls();
+    }
+    return true;
+  }
+
+  function initLeadCrawler() {
+    LEAD.active = false;
+    LEAD.trail  = [];
+    LEAD.homeBtn = findLeadHomeHex();
+    LEAD.btn     = LEAD.homeBtn;
+    if (LEAD.homeBtn) renderLeadIdlePulse();
+  }
+
   // ══════════════════════════════════════════════════════════════════
   //  ARP PITCH CONTROLS — appear when loop reaches 2 notes
   //  Two hexes in the lower-left: UP shifts root up one interval,
@@ -2623,16 +3097,47 @@
   // semitone → frequency ratio
   function semiToRatio(semi) { return Math.pow(2, semi / 12); }
 
+  function findLowerRightHexes() {
+    // Score: high cy = near bottom, high cx = near right
+    const maxCy = Math.max(...btns.map(b => b.cy));
+    const rowSp = hexR * Math.sqrt(3) + GAP;
+    const sorted = [...btns]
+      .filter(b => b.cy < maxCy - rowSp * 0.5)
+      .sort((a, b) => {
+        const scoreA = a.cy + a.cx * 1.5;
+        const scoreB = b.cy + b.cx * 1.5;
+        return scoreB - scoreA;
+      });
+    const occupied = new Set([
+      CRAWLER.btn?.key, PENDING.btn?.key, CRAWLER.homeBtn?.key,
+      LEAD.btn?.key, LEAD_PENDING.btn?.key, LEAD.homeBtn?.key,
+      ...CRAWLER.trail.map(t => t.btn.key),
+      ...LEAD.trail.map(t => t.btn.key),
+    ]);
+    const free = sorted.filter(b => !b.active && !occupied.has(b.key));
+    return [free[0] || null, free[1] || null];
+  }
+
   function findLowerLeftHexes() {
-    // Sort by (cx + (screenH - cy)) descending = bottom-left corner
-    const H = window.innerHeight;
-    const sorted = [...btns].sort((a, b) =>
-      ((H - b.cy) + b.cx * 0.3) - ((H - a.cy) + a.cx * 0.3)
-    );
+    // Score: high cy = near bottom, low cx = near left
+    // Exclude the very bottom row to avoid clipping on small screens
+    const maxCy = Math.max(...btns.map(b => b.cy));
+    const rowSp = hexR * Math.sqrt(3) + GAP;
+    const sorted = [...btns]
+      .filter(b => b.cy < maxCy - rowSp * 0.5)
+      .sort((a, b) => {
+        const scoreA = a.cy - a.cx * 1.5;
+        const scoreB = b.cy - b.cx * 1.5;
+        return scoreB - scoreA;
+      });
     // Skip any that are active kicks or the crawler/pending
     const occupied = new Set([
       CRAWLER.btn?.key, PENDING.btn?.key,
-      ...CRAWLER.trail.map(t => t.btn.key)
+      CRAWLER.homeBtn?.key,
+      LEAD.btn?.key, LEAD_PENDING.btn?.key,
+      LEAD.homeBtn?.key,
+      ...CRAWLER.trail.map(t => t.btn.key),
+      ...LEAD.trail.map(t => t.btn.key),
     ]);
     const free = sorted.filter(b => !b.active && !occupied.has(b.key));
     return [free[0] || null, free[1] || null];
@@ -2720,6 +3225,75 @@
       shiftArpPitch(-2); // down a whole step
       return true;
     }
+    return false;
+  }
+
+
+  // ── Lead pitch controls — bottom-right, same halve-to-2 trigger ──
+  const LEAD_PITCH = { up: null, dn: null, visible: false, semitone: 0 };
+
+  function paintLeadPitchCtrl() {
+    if (LEAD_PITCH.up && !LEAD_PITCH.up.active) {
+      leadCrawlerPaint(LEAD_PITCH.up, 255, 200, 40, 0.65); // gold = UP
+      LEAD_PITCH.up.el.classList.add('crawler-idle');
+    }
+    if (LEAD_PITCH.dn && !LEAD_PITCH.dn.active) {
+      leadCrawlerPaint(LEAD_PITCH.dn, 255, 100, 20, 0.65); // amber-orange = DOWN
+      LEAD_PITCH.dn.el.classList.add('crawler-idle');
+    }
+  }
+
+  function clearLeadPitchCtrl() {
+    [LEAD_PITCH.up, LEAD_PITCH.dn].forEach(b => {
+      if (!b) return;
+      b.el.classList.remove('crawler-idle');
+      b.el.style.filter = '';
+      if (!b.active) setHexColor(b, 0, 0, 0, 0.0);
+    });
+    LEAD_PITCH.up = null; LEAD_PITCH.dn = null; LEAD_PITCH.visible = false;
+  }
+
+  function showLeadPitchControls() {
+    if (LEAD_PITCH.visible) return;
+    const [a, b] = findLowerRightHexes();
+    if (!a || !b) return;
+    LEAD_PITCH.up = a; LEAD_PITCH.dn = b;
+    LEAD_PITCH.visible = true;
+    paintLeadPitchCtrl();
+  }
+
+  function hideLeadPitchControls() { clearLeadPitchCtrl(); }
+
+  function shiftLeadPitch(delta) {
+    LEAD_PITCH.semitone = Math.max(-24, Math.min(24, LEAD_PITCH.semitone + delta));
+    const ratio = Math.pow(2, LEAD_PITCH.semitone / 12);
+    const base = LEAD.fullArpSeq;
+    if (!base.length) return;
+    const shifted = base.map(hz => {
+      let f = hz * ratio;
+      while (f < 200) f *= 2;
+      while (f > 900) f *= 0.5;
+      return f;
+    });
+    const curLen = LEAD.arpSeq.length;
+    LEAD.arpSeq = shifted.slice(0, curLen);
+    const btn = delta > 0 ? LEAD_PITCH.up : LEAD_PITCH.dn;
+    if (btn) {
+      btn.el.classList.add('pressed');
+      setTimeout(() => { btn.el.classList.remove('pressed'); paintLeadPitchCtrl(); }, 150);
+    }
+  }
+
+  function checkLeadPitchControls() {
+    if (!LEAD.active && !LEAD.paused) { hideLeadPitchControls(); return; }
+    if (LEAD.arpSeq.length <= 2) showLeadPitchControls();
+    else hideLeadPitchControls();
+  }
+
+  function leadPitchHitTest(b) {
+    if (!LEAD_PITCH.visible) return false;
+    if (LEAD_PITCH.up && b.key === LEAD_PITCH.up.key) { shiftLeadPitch(2);  return true; }
+    if (LEAD_PITCH.dn && b.key === LEAD_PITCH.dn.key) { shiftLeadPitch(-2); return true; }
     return false;
   }
 
