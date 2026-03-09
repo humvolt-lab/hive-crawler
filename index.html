@@ -1894,9 +1894,21 @@
     btns = [];
     Object.keys(hexMap).forEach(k => delete hexMap[k]);
 
-    // Read safe area insets — add top inset as extra margin so hexes clear the notch
-    const safeTop    = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--sat') || '0') || 0;
-    const safeBottom = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--sab') || '0') || 0;
+    // Measure safe area insets using a probe element — only reliable method on iOS
+    let safeTop = 0, safeBottom = 0;
+    try {
+      const probe = document.createElement('div');
+      probe.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;' +
+        'padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom);' +
+        'visibility:hidden;pointer-events:none;';
+      document.body.appendChild(probe);
+      const cs = getComputedStyle(probe);
+      safeTop    = parseFloat(cs.paddingTop)    || 0;
+      safeBottom = parseFloat(cs.paddingBottom) || 0;
+      document.body.removeChild(probe);
+    } catch(e) {}
+    // Add a 12px buffer above the top row so it never clips
+    safeTop = Math.max(safeTop, 12) + 12;
     const W = window.innerWidth;
     const H = window.innerHeight - safeTop - safeBottom;
     const sqrt3 = Math.sqrt(3);
@@ -2034,8 +2046,13 @@
     assignHexColors(btns);
 
     // Remove the 7 joystick zone hexes from the DOM and data structures
-    // (computed now that hexMap is fully populated)
-    const sorted = [...btns].sort((a, b) => (b.cx + b.cy) - (a.cx + a.cy));
+    // Pick the hex closest to the screen centre with a full ring of 6 neighbors
+    const midX = W / 2, midY = H + safeTop;
+    const sorted = [...btns].sort((a, b) => {
+      const da = (a.cx - midX) ** 2 + (a.cy - midY) ** 2;
+      const db = (b.cx - midX) ** 2 + (b.cy - midY) ** 2;
+      return da - db;
+    });
     let stickPick = null;
     for (const btn of sorted) {
       const nkeys = getNeighborKeys(btn.col, btn.row);
