@@ -117,6 +117,54 @@
     text-transform: uppercase;
   }
 
+
+  /* ── BPM selector on splash ── */
+  .bpm-selector {
+    position: relative;
+    z-index: 2;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    margin-top: 36px;
+    pointer-events: all;
+  }
+  .bpm-label {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 9px;
+    letter-spacing: 0.32em;
+    color: rgba(160,80,255,0.55);
+    text-transform: uppercase;
+  }
+  .bpm-options {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+  .bpm-opt {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 13px;
+    letter-spacing: 0.06em;
+    color: rgba(255,255,255,0.35);
+    padding: 7px 13px;
+    border: 1px solid rgba(160,80,255,0.2);
+    border-radius: 3px;
+    background: transparent;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition: color 0.15s, border-color 0.15s, background 0.15s;
+    user-select: none;
+  }
+  .bpm-opt.selected {
+    color: rgba(255,255,255,0.92);
+    border-color: rgba(160,80,255,0.75);
+    background: rgba(140,60,255,0.12);
+    box-shadow: 0 0 12px rgba(140,60,255,0.2);
+  }
+  .bpm-opt:active {
+    background: rgba(140,60,255,0.22);
+  }
+
   /* Big glowing tap button */
   .enter-btn {
     pointer-events: all;
@@ -406,6 +454,18 @@
     <div class="tagline">808 hexaphonic beat engine</div>
   </div>
 
+  <!-- BPM selector -->
+  <div class="bpm-selector">
+    <div class="bpm-label">BPM</div>
+    <div class="bpm-options" id="bpmOptions">
+      <div class="bpm-opt" data-bpm="80">80</div>
+      <div class="bpm-opt" data-bpm="95">95</div>
+      <div class="bpm-opt selected" data-bpm="110">110</div>
+      <div class="bpm-opt" data-bpm="125">125</div>
+      <div class="bpm-opt" data-bpm="140">140</div>
+    </div>
+  </div>
+
   <!-- Enter button -->
   <div class="enter-btn" id="enterBtn">
     <div class="enter-line"></div>
@@ -542,7 +602,6 @@
   let fxCrushProc, fxCrushWet, fxCrushDry; // real bitcrusher (ScriptProcessor)
   let fxTapeShaper, fxTapeWet, fxTapeDry; // tape saturation
   let fxStutterGain;                       // stutter gate
-  let stutterLfoId = null;                 // RAF id for stutter
   let masterBus, limiter;                  // master + output
 
   function rampParam(param, target, now, t = 0.06) {
@@ -616,7 +675,7 @@
 
     // ── Delay send/return ──
     fxDelayNode = c.createDelay(2.0);
-    fxDelayNode.delayTime.value = (60 / 110) * 0.5; // 8th note at 110bpm
+    fxDelayNode.delayTime.value = (60 / BPM) * 0.5; // 8th note at BPM
     fxDelayFB  = c.createGain(); fxDelayFB.gain.value  = 0.35;
     fxDelayWet = c.createGain(); fxDelayWet.gain.value = 0.0;
     fxDelayNode.connect(fxDelayFB);
@@ -717,7 +776,7 @@
     const t   = 0.08;
 
     // Master gain — baseline 0.9, pulled down by distortion amount
-    rampParam(masterBus.gain, 0.9 - fx.dist * 0.38, now, t);
+    rampParam(masterBus.gain, 0.9 - fx.dist * 0.55, now, t);
 
     // ── UP: Soft drive — 0 = bypass, 1 = warm tube overdrive ──
     if (fxDriveWet) {
@@ -732,7 +791,7 @@
     rampParam(fxDelayWet.gain, fx.delay * 0.65, now, t);
 
     // ── LOWER-RIGHT: Distortion — compensate master for added harmonic energy ──
-    rampParam(fxDistWet.gain, fx.dist * 0.85, now, t);
+    rampParam(fxDistWet.gain, fx.dist * 0.45, now, t);
     rampParam(fxDistDry.gain, Math.max(0.15, 1.0 - fx.dist * 0.75), now, t);
 
 
@@ -751,48 +810,40 @@
       rampParam(fxCrushDry.gain, Math.max(0.15, 1.0 - amt * 0.85), now, t);
     }
 
-    // ── DOWN: Stutter gate ──
-    applyStutter(fx.stutter);
+    // ── DOWN: Stutter gate — driven from processTick via tickStutter() ──
   }
 
-  // Stutter gate — tempo-synced rhythmic chopping
-  let stutterPhase = 0;
-  function applyStutter(amount) {
+  // Stutter gate — driven from processTick, perfectly BPM-locked
+  function tickStutter(tickTime) {
     if (!fxStutterGain || !audioCtx) return;
+    const amount = fx.stutter;
+
     if (amount < 0.05) {
-      // Off — ramp to full gain smoothly
-      const tOff = audioCtx.currentTime;
-      fxStutterGain.gain.cancelScheduledValues(tOff);
-      fxStutterGain.gain.setValueAtTime(fxStutterGain.gain.value, tOff);
-      fxStutterGain.gain.linearRampToValueAtTime(1.0, tOff + 0.012);
-      if (stutterLfoId) { clearTimeout(stutterLfoId); stutterLfoId = null; }
+      fxStutterGain.gain.cancelScheduledValues(tickTime);
+      fxStutterGain.gain.setValueAtTime(fxStutterGain.gain.value, tickTime);
+      fxStutterGain.gain.linearRampToValueAtTime(1.0, tickTime + 0.012);
       return;
     }
-    if (stutterLfoId) return; // already running
-    // Chop rate: at full push = 32nd notes, scales with amount
-    const chopTick = () => {
-      if (!audioCtx || fx.stutter < 0.05) {
-        fxStutterGain.gain.cancelScheduledValues(audioCtx.currentTime);
-        fxStutterGain.gain.setValueAtTime(1.0, audioCtx.currentTime);
-        stutterLfoId = null; return;
-      }
-      const now = audioCtx.currentTime;
-      const rate = fx.stutter; // 0–1
-      // Period: 32nd note at full, 8th note at min
-      const period = SIXTEENTH_MS / 1000 * (2 - rate * 1.5);
-      const duty    = 0.35 + rate * 0.25; // gate open ratio
-      const onTime  = period * duty;
-      const offTime = period * (1 - duty);
-      // Short fade at each edge to eliminate clicks — 4ms ramps
-      const fade = Math.min(0.004, onTime * 0.12, offTime * 0.12);
-      fxStutterGain.gain.cancelScheduledValues(now);
-      fxStutterGain.gain.setValueAtTime(1.0,  now);
-      fxStutterGain.gain.linearRampToValueAtTime(0.0,  now + onTime - fade);
-      fxStutterGain.gain.setValueAtTime(0.0,  now + onTime);
-      fxStutterGain.gain.linearRampToValueAtTime(1.0,  now + onTime + fade * 2);
-      stutterLfoId = setTimeout(chopTick, period * 1000 * 0.9);
+
+    // Chop division: low amount = 8th note chop, mid = 16th, high = 32nd
+    const sixteenth = SIXTEENTH_MS / 1000;
+    const chopDiv   = amount < 0.4 ? 2 : amount < 0.75 ? 1 : 0.5;
+    const period    = sixteenth * chopDiv;
+    const onTime    = period * (0.4 + amount * 0.2);
+    const fade      = Math.min(0.004, onTime * 0.15);
+
+    // Schedule chop cycle(s) aligned to this tick
+    const scheduleChop = (t) => {
+      fxStutterGain.gain.cancelScheduledValues(t);
+      fxStutterGain.gain.setValueAtTime(1.0, t);
+      fxStutterGain.gain.linearRampToValueAtTime(0.0, t + onTime - fade);
+      fxStutterGain.gain.setValueAtTime(0.0, t + onTime);
+      fxStutterGain.gain.linearRampToValueAtTime(1.0, t + onTime + fade * 2);
     };
-    chopTick();
+
+    scheduleChop(tickTime);
+    // 32nd note = two chops per 16th tick
+    if (chopDiv < 1) scheduleChop(tickTime + period);
   }
 
   function warmUpAudio(c) {
@@ -816,6 +867,17 @@
     }
     return audioCtx;
   }
+
+  // BPM selector
+  document.getElementById('bpmOptions').addEventListener('pointerdown', e => {
+    const opt = e.target.closest('.bpm-opt');
+    if (!opt) return;
+    e.stopPropagation();
+    document.querySelectorAll('.bpm-opt').forEach(o => o.classList.remove('selected'));
+    opt.classList.add('selected');
+    BPM = parseInt(opt.dataset.bpm, 10);
+    updateBpmTimings();
+  }, { passive: false });
 
   enterBtn.addEventListener('pointerdown', e => {
     e.preventDefault();
@@ -1138,9 +1200,15 @@
   // When two rings from different sources land on the same hex in the same tick:
   //   ring1 + ring1  → hi-hat
   //   ring1 + ring2, or ring2 + ring2 → snare
-  const BPM = 110;
-  const SIXTEENTH_MS = (60 / BPM) * 1000 / 4;  // ~136ms per 16th note
-  const EIGHTH_MS    = SIXTEENTH_MS * 2;         // ~272ms — used for ring offsets
+  let BPM = 110;
+  let SIXTEENTH_MS = (60 / BPM) * 1000 / 4;
+  let EIGHTH_MS    = SIXTEENTH_MS * 2;
+  function updateBpmTimings() {
+    SIXTEENTH_MS = (60 / BPM) * 1000 / 4;
+    EIGHTH_MS    = SIXTEENTH_MS * 2;
+    // Update delay node to stay in tempo
+    if (fxDelayNode) fxDelayNode.delayTime.value = (60 / BPM) * 0.5;
+  }
 
   // ── Rhythm generator ──
   // Clock resolution: 16th notes at 110 BPM (~136ms per tick)
@@ -1515,6 +1583,10 @@
 
   function processTick() {
     masterTick++;
+
+    // Web Audio timestamp for this tick — used for sample-accurate stutter scheduling
+    const tickAudioTime = audioCtx ? audioCtx.currentTime + AUDIO_AHEAD : 0;
+    tickStutter(tickAudioTime);
 
     // ── Drive crawlers from master clock — perfect sync with drums ──
     if (CRAWLER.active) {
@@ -1931,6 +2003,10 @@
     stickVisible = false;
     // Reset FX to neutral
     fx.drive = 0; fx.delay = 0; fx.dist = 0; fx.stutter = 0; fx.crush = 0; fx.tape = 0;
+    if (fxStutterGain && audioCtx) {
+      fxStutterGain.gain.cancelScheduledValues(audioCtx.currentTime);
+      fxStutterGain.gain.setValueAtTime(1.0, audioCtx.currentTime);
+    }
     applyFxState();
     updateFxDots();
   }
@@ -2230,9 +2306,24 @@
     if (stickPick) {
       stickPickCx = stickPick.cx;  // save before deletion
       stickPickCy = stickPick.cy;
-      const zoneKeys = [stickPick.key, ...getNeighborKeys(stickPick.col, stickPick.row)];
+
       // Draw well BEFORE removing hexes so drawStickWell can read their positions
       drawStickWell(stickPick);
+
+      // The well is visually shifted by (-colSpacing, -rowSpacing*0.5) from stickPick.
+      // Find the hex closest to that shifted position — that is the true visual centre —
+      // and delete THAT hex's zone so the grid matches what the well covers.
+      const colSp = hexR * 1.5 + GAP;
+      const rowSp = hexR * Math.sqrt(3) + GAP;
+      const wellCx = stickPick.cx - colSp;
+      const wellCy = stickPick.cy - rowSp * 0.5;
+      const visualCentre = btns.reduce((best, b) => {
+        const db = (b.cx - wellCx) ** 2 + (b.cy - wellCy) ** 2;
+        const dBest = (best.cx - wellCx) ** 2 + (best.cy - wellCy) ** 2;
+        return db < dBest ? b : best;
+      }, btns[0]);
+
+      const zoneKeys = [visualCentre.key, ...getNeighborKeys(visualCentre.col, visualCentre.row)];
       zoneKeys.forEach(k => {
         const b = hexMap[k];
         if (!b) return;
@@ -2306,7 +2397,17 @@
     nb.el.classList.add(cls);
     setTimeout(() => {
       nb.el.classList.remove(cls);
-      if (!nb.active) setHexColor(nb, 0, 0, 0, 0.0);
+      if (!nb.active) {
+        // Don't wipe crawler/pending hexes — they repaint themselves
+        const isCrawlerHex =
+          (CRAWLER.btn && nb.key === CRAWLER.btn.key) ||
+          CRAWLER.trail.some(t => t.btn.key === nb.key) ||
+          (PENDING.btn && nb.key === PENDING.btn.key) ||
+          (LEAD.btn && nb.key === LEAD.btn.key) ||
+          LEAD.trail.some(t => t.btn.key === nb.key) ||
+          (LEAD_PENDING.btn && nb.key === LEAD_PENDING.btn.key);
+        if (!isCrawlerHex) setHexColor(nb, 0, 0, 0, 0.0);
+      }
     }, duration);
   }
 
