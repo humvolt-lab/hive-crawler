@@ -350,6 +350,47 @@ drop-shadow(0 0 12px rgba(var(–r),var(–g),var(–b), 0.12)); }
 drop-shadow(0 0 0px rgba(var(–r),var(–g),var(–b), 0)); }
 }
 
+/* ── First-load hint overlay ── */
+#hint-overlay {
+position: fixed;
+inset: 0;
+z-index: 60;
+pointer-events: none;
+opacity: 0;
+transition: opacity 1.2s ease;
+}
+#hint-overlay.visible {
+opacity: 1;
+}
+#hint-overlay.fading {
+opacity: 0;
+transition: opacity 0.6s ease;
+}
+.hint {
+position: absolute;
+display: flex;
+align-items: center;
+gap: 7px;
+font-family: ‘Share Tech Mono’, monospace;
+font-size: 10px;
+letter-spacing: 0.18em;
+text-transform: uppercase;
+color: rgba(255,255,255,0.55);
+white-space: nowrap;
+}
+.hint-arrow {
+font-size: 13px;
+opacity: 0.5;
+flex-shrink: 0;
+}
+.hint-text {
+line-height: 1.5;
+}
+.hint-text em {
+font-style: normal;
+color: rgba(255,255,255,0.85);
+}
+
 /* ═══════════════════════════════════════
 THUMBSTICK / CHAOS PAD
 ═══════════════════════════════════════ */
@@ -493,6 +534,31 @@ animation: crawlerPulse 1.8s ease-in-out infinite;
 </div>
 <!-- ── Hex grid stage ── -->
 <div id="stage"></div>
+
+<!-- ── First-load hints ── -->
+
+<div id="hint-overlay">
+  <!-- top-left: bass crawler -->
+  <div class="hint" style="top:env(safe-area-inset-top,12px); left:12px; flex-direction:row; padding-top:16px;">
+    <div class="hint-arrow">↖</div>
+    <div class="hint-text"><em>bass arp</em><br>tap to start</div>
+  </div>
+  <!-- top-right: lead crawler -->
+  <div class="hint" style="top:env(safe-area-inset-top,12px); right:12px; flex-direction:row-reverse; padding-top:16px;">
+    <div class="hint-arrow">↗</div>
+    <div class="hint-text" style="text-align:right;"><em>lead arp</em><br>tap to start</div>
+  </div>
+  <!-- centre: drum grid -->
+  <div class="hint" style="top:50%; left:50%; transform:translate(-50%,-50%); flex-direction:column; gap:4px; text-align:center;">
+    <div class="hint-text"><em>tap hexes</em><br>to add drums</div>
+    <div class="hint-arrow" style="font-size:18px;">⬡</div>
+  </div>
+  <!-- bottom-center: joystick -->
+  <div class="hint" style="bottom:calc(env(safe-area-inset-bottom,12px) + 12px); left:50%; transform:translateX(-50%); flex-direction:column-reverse; gap:4px; text-align:center;">
+    <div class="hint-arrow">↓</div>
+    <div class="hint-text"><em>joystick</em><br>drag for fx</div>
+  </div>
+</div>
 
 <script>
 (() => {
@@ -916,6 +982,11 @@ animation: crawlerPulse 1.8s ease-in-out infinite;
     // Build grid
     buildGrid();
     attachStageEvents();
+    // Show hints after grid fades in
+    setTimeout(() => {
+      const ho = document.getElementById('hint-overlay');
+      if (ho) ho.classList.add('visible');
+    }, 900);
   }, { passive: false });
 
   /* Soft welcome thud on enter */
@@ -1570,6 +1641,17 @@ animation: crawlerPulse 1.8s ease-in-out infinite;
   function flashCollision(hexKey, type) {
     const nb = hexMap[hexKey];
     if (!nb || nb.active) return;
+    // Never animate over crawler/pending hexes
+    if (
+      (LEAD.btn?.key === nb.key) ||
+      LEAD.trail.some(t => t.btn.key === nb.key) ||
+      (LEAD_PENDING.btn?.key === nb.key) ||
+      (LEAD.homeBtn?.key === nb.key) ||
+      (CRAWLER.btn?.key === nb.key) ||
+      CRAWLER.trail.some(t => t.btn.key === nb.key) ||
+      (PENDING.btn?.key === nb.key) ||
+      (CRAWLER.homeBtn?.key === nb.key)
+    ) return;
     const [R, G, B] = COLLISION_COLORS[type] || [255, 255, 255];
     const intensity = type === 'ghost' ? 0.28 : 0.52;
     setHexColor(nb, R, G, B, intensity);
@@ -2396,23 +2478,24 @@ animation: crawlerPulse 1.8s ease-in-out infinite;
 
   function pulseHex(nb, R, G, B, cls, duration, intensity) {
     if (!nb) return;
+    // Never animate over crawler/pending hexes
+    if (
+      (LEAD.btn?.key === nb.key) ||
+      LEAD.trail.some(t => t.btn.key === nb.key) ||
+      (LEAD_PENDING.btn?.key === nb.key) ||
+      (LEAD.homeBtn?.key === nb.key) ||
+      (CRAWLER.btn?.key === nb.key) ||
+      CRAWLER.trail.some(t => t.btn.key === nb.key) ||
+      (PENDING.btn?.key === nb.key) ||
+      (CRAWLER.homeBtn?.key === nb.key)
+    ) return;
     if (!nb.active) setHexColor(nb, R, G, B, intensity);
     nb.el.classList.remove('neighbor-pulse', 'neighbor-pulse-2');
     void nb.el.offsetWidth;
     nb.el.classList.add(cls);
     setTimeout(() => {
       nb.el.classList.remove(cls);
-      if (!nb.active) {
-        // Don't wipe crawler/pending hexes — they repaint themselves
-        const isCrawlerHex =
-          (CRAWLER.btn && nb.key === CRAWLER.btn.key) ||
-          CRAWLER.trail.some(t => t.btn.key === nb.key) ||
-          (PENDING.btn && nb.key === PENDING.btn.key) ||
-          (LEAD.btn && nb.key === LEAD.btn.key) ||
-          LEAD.trail.some(t => t.btn.key === nb.key) ||
-          (LEAD_PENDING.btn && nb.key === LEAD_PENDING.btn.key);
-        if (!isCrawlerHex) setHexColor(nb, 0, 0, 0, 0.0);
-      }
+      if (!nb.active) setHexColor(nb, 0, 0, 0, 0.0);
     }, duration);
   }
 
@@ -2531,6 +2614,13 @@ animation: crawlerPulse 1.8s ease-in-out infinite;
     stage.addEventListener('pointerdown', e => {
       e.preventDefault();
       stage.setPointerCapture(e.pointerId);
+      // Fade hints on first touch
+      const ho = document.getElementById('hint-overlay');
+      if (ho && ho.classList.contains('visible')) {
+        ho.classList.remove('visible');
+        ho.classList.add('fading');
+        setTimeout(() => ho.remove(), 700);
+      }
       const b = hitTest(e.clientX, e.clientY);
       if (b && !touched.has(b.key)) {
         touched.add(b.key);
@@ -2867,10 +2957,12 @@ animation: crawlerPulse 1.8s ease-in-out infinite;
     if (LEAD_OSC.osc1) return;
     const c = getCtx();
     const now = c.currentTime;
+    // Pin gain to absolute zero before oscillators start — prevents click on first note
     LEAD_OSC.gain = c.createGain();
+    LEAD_OSC.gain.gain.value = 0;
     LEAD_OSC.gain.gain.setValueAtTime(0, now);
+    LEAD_OSC.gain.gain.setValueAtTime(0, now + 0.5); // hold zero until first note fires
 
-    // Slightly brighter filter for lead vs bass
     const lpf1 = c.createBiquadFilter();
     lpf1.type = 'lowpass'; lpf1.frequency.value = 3200; lpf1.Q.value = 1.8;
     const lpf2 = c.createBiquadFilter();
@@ -2879,12 +2971,13 @@ animation: crawlerPulse 1.8s ease-in-out infinite;
     LEAD_OSC.osc1 = c.createOscillator(); LEAD_OSC.osc1.type = 'sawtooth';
     LEAD_OSC.osc2 = c.createOscillator(); LEAD_OSC.osc2.type = 'sawtooth';
     LEAD_OSC.osc1.frequency.value = LEAD_OSC.freq;
-    LEAD_OSC.osc2.frequency.value = LEAD_OSC.freq * Math.pow(2, 9/1200); // 9 cents detune
+    LEAD_OSC.osc2.frequency.value = LEAD_OSC.freq * Math.pow(2, 9/1200);
 
     LEAD_OSC.osc1.connect(lpf1); lpf1.connect(LEAD_OSC.gain);
     LEAD_OSC.osc2.connect(lpf2); lpf2.connect(LEAD_OSC.gain);
     LEAD_OSC.gain.connect(getLeadDest());
-    LEAD_OSC.osc1.start(); LEAD_OSC.osc2.start();
+    // Start slightly ahead so gain is locked at 0 when audio begins
+    LEAD_OSC.osc1.start(now + 0.02); LEAD_OSC.osc2.start(now + 0.02);
     LEAD_OSC.lpf1 = lpf1; LEAD_OSC.lpf2 = lpf2;
   }
 
@@ -2915,7 +3008,7 @@ animation: crawlerPulse 1.8s ease-in-out infinite;
     LEAD_OSC.gain.gain.cancelScheduledValues(now);
     LEAD_OSC.gain.gain.setValueAtTime(LEAD_OSC.gain.gain.value, now);
     const leadVol = LEAD.arpSeq.length <= 1 ? 0.12 : 0.22;
-    LEAD_OSC.gain.gain.linearRampToValueAtTime(leadVol, now + 0.015);
+    LEAD_OSC.gain.gain.linearRampToValueAtTime(leadVol, now + 0.035);
     LEAD_OSC.gain.gain.setValueAtTime(leadVol, now + holdDur - 0.02);
     LEAD_OSC.gain.gain.linearRampToValueAtTime(0.0, now + holdDur);
   }
