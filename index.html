@@ -662,13 +662,13 @@ animation: crawlerPulse 1.8s ease-in-out infinite;
   // ══════════════════════════════════════════════════════
 
   // Joystick FX state (0–1 normalised)
-  const fx = { drive: 0.0, delay: 0.0, dist: 0.0, stutter: 0.0, crush: 0.0, tape: 0.0 };
+  const fx = { filter: 0.0, delay: 0.0, dist: 0.0, stutter: 0.0, crush: 0.0, tape: 0.0 };
 
   // Bus nodes — populated by buildAudioChain()
   let kickBus, percBus, arpBus, leadBus;  // source buses
   let fxDistWet, fxDistDry, fxDistShaper; // distortion insert
   let fxFilter;
-  let fxDriveShaper, fxDriveWet, fxDriveDry; // soft drive insert
+  let fxDriveShaper, fxDriveWet, fxDriveDry; // kept for graph wiring but bypassed
   let fxDelayNode, fxDelayWet, fxDelayFB; // delay send/return
   let fxCrushProc, fxCrushWet, fxCrushDry; // real bitcrusher (ScriptProcessor)
   let fxTapeShaper, fxTapeWet, fxTapeDry; // tape saturation
@@ -849,13 +849,13 @@ animation: crawlerPulse 1.8s ease-in-out infinite;
     // Master gain — baseline 0.9, pulled down by distortion amount
     rampParam(masterBus.gain, 0.9 - fx.dist * 0.55, now, t);
 
-    // ── UP: Soft drive — 0 = bypass, 1 = warm tube overdrive ──
-    if (fxDriveWet) {
-      const dval = Math.max(0, fx.drive);
-      rampParam(fxDriveWet.gain, dval * 0.8, now, t);
-      rampParam(fxDriveDry.gain, Math.max(0.2, 1.0 - dval * 0.7), now, t);
-      // Compensate master gain for drive — less aggressive than hard dist
-      rampParam(masterBus.gain, (0.9 - fx.dist * 0.38) - dval * 0.18, now, t);
+    // ── UP: Low-pass filter sweep — 0 = fully open, 1 = dark/closed ──
+    if (fxFilter) {
+      const fval = Math.max(0, fx.filter);
+      // At rest (0): 22kHz = transparent. Full push (1): ~180Hz = closed dark
+      const freq = fval < 0.01 ? 22000 : 22000 * Math.pow(180 / 22000, fval);
+      rampParam(fxFilter.frequency, freq, now, t);
+      rampParam(fxFilter.Q, 0.7 + fval * 3.5, now, t);
     }
 
     // ── UPPER-RIGHT: Delay ──
@@ -2089,7 +2089,7 @@ animation: crawlerPulse 1.8s ease-in-out infinite;
     stickWrap.style.display = 'none';
     stickVisible = false;
     // Reset FX to neutral
-    fx.drive = 0; fx.delay = 0; fx.dist = 0; fx.stutter = 0; fx.crush = 0; fx.tape = 0;
+    fx.filter = 0; fx.delay = 0; fx.dist = 0; fx.stutter = 0; fx.crush = 0; fx.tape = 0;
     if (fxStutterGain && audioCtx) {
       fxStutterGain.gain.cancelScheduledValues(audioCtx.currentTime);
       fxStutterGain.gain.setValueAtTime(1.0, audioCtx.currentTime);
@@ -2111,7 +2111,7 @@ animation: crawlerPulse 1.8s ease-in-out infinite;
 
     // 6 independent directions — each maps to a unique effect
     const dirs = [
-      { angle: -Math.PI/2,      key: 'drive'   },  // up          → soft drive
+      { angle: -Math.PI/2,      key: 'filter'  },  // up          → lowpass filter
       { angle: -Math.PI/6,      key: 'delay'   },  // upper-right → delay
       { angle:  Math.PI/6,      key: 'dist'    },  // lower-right → distortion
       { angle:  Math.PI/2,      key: 'stutter' },  // down        → stutter gate
@@ -2131,7 +2131,7 @@ animation: crawlerPulse 1.8s ease-in-out infinite;
     if (best) fx[best.key] = bestProj;
 
     // Filter: 1.0 at rest (open), scales up with up-push
-    fx.drive = Math.max(0, Math.cos(angle - (-Math.PI/2)) * norm);
+    fx.filter = Math.max(0, Math.cos(angle - (-Math.PI/2)) * norm);
 
     applyFxState();
     updateFxDots();
@@ -2146,7 +2146,7 @@ animation: crawlerPulse 1.8s ease-in-out infinite;
   }
 
   function updateFxDots() {
-    document.getElementById('dot-filter').classList.toggle('active', fx.drive > 0.1);
+    document.getElementById('dot-filter').classList.toggle('active', fx.filter > 0.1);
     document.getElementById('dot-delay').classList.toggle('active',  fx.delay > 0.1);
     document.getElementById('dot-dist').classList.toggle('active',   fx.dist  > 0.1);
   }
@@ -2159,7 +2159,7 @@ animation: crawlerPulse 1.8s ease-in-out infinite;
       stickX *= 0.78; stickY *= 0.78;
       if (Math.abs(stickX) < 0.5 && Math.abs(stickY) < 0.5) {
         stickX = 0; stickY = 0;
-        fx.drive = 0; fx.delay = 0; fx.dist = 0; fx.stutter = 0; fx.crush = 0; fx.tape = 0;
+        fx.filter = 0; fx.delay = 0; fx.dist = 0; fx.stutter = 0; fx.crush = 0; fx.tape = 0;
         applyFxState();
       }
       updateStickFx();
