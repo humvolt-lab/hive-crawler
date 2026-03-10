@@ -3043,7 +3043,7 @@
     const holdDur = (SIXTEENTH_MS * 7.5) / 1000; // hold for ~2 bars worth
     LEAD_OSC.gain.gain.cancelScheduledValues(now);
     LEAD_OSC.gain.gain.setValueAtTime(LEAD_OSC.gain.gain.value, now);
-    const leadVol = LEAD.arpSeq.length <= 1 ? 0.12 : 0.22;
+    const leadVol = 0.22;
     LEAD_OSC.gain.gain.linearRampToValueAtTime(leadVol, now + 0.035);
     LEAD_OSC.gain.gain.setValueAtTime(leadVol, now + holdDur - 0.02);
     LEAD_OSC.gain.gain.linearRampToValueAtTime(0.0, now + holdDur);
